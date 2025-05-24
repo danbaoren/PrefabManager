@@ -1,0 +1,68 @@
+[
+  {
+    "pathPrefab": "Foliage/1_Trees/Tree",
+    "transforms": {
+      "position": [
+        -9737.72,
+        1500,
+        -5997.74
+      ],
+      "rotation": [
+        -5.890225770039997e-16,
+        -1.3613568165555774,
+        -4.536863405597702e-16
+      ],
+      "scale": [
+        1000.0000000000002,
+        947,
+        1000.0000000000002
+      ]
+    },
+    "renderDistance": 1000,
+    "isHidden": false
+  },
+  {
+    "pathPrefab": "Foliage/1_Trees/Tree2",
+    "transforms": {
+      "position": [
+        19,
+        5000,
+        -100
+      ],
+      "rotation": [
+        -3.141592653589793,
+        1.5358897417550077,
+        -3.141592653589793
+      ],
+      "scale": [
+        10,
+        34,
+        10
+      ]
+    },
+    "renderDistance": 12345,
+    "isHidden": false
+  },
+  {
+    "pathPrefab": "Foliage/2_Rocks-Flowers/Bush",
+    "transforms": {
+      "position": [
+        -2928.6668344379686,
+        1152.694228466924,
+        -3695.673755293135
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        100,
+        100,
+        100
+      ]
+    },
+    "renderDistance": 1233333,
+    "isHidden": false
+  }
+]
