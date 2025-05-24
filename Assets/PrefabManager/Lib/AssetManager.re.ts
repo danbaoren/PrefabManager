@@ -2,6 +2,13 @@ import * as RE from 'rogue-engine';
 import * as THREE from 'three';
 import AM_Handler from './AM_Handler.re'; 
 import AM_JsonLoader from './AM_JsonLoader.re'; 
+import AM_UI from './AM_UI.re';
+import { EventDispatcher } from 'three';
+
+interface PrefabEvent {
+  type: 'prefabShown' | 'prefabHidden';
+  prefabId: string;
+}
 
 @RE.registerComponent
 export default class AssetManager extends RE.Component {
@@ -28,12 +35,14 @@ export default class AssetManager extends RE.Component {
   @RE.props.text() private boostKey = 'shift';
   @RE.props.checkbox() showCrosshairInitially: boolean = true;
   @RE.props.text() toggleCrosshairKey: string = 'c';
-  @RE.props.num() renderDistance: number = 1000;
+  @RE.props.num() renderDistance: number = 1000000;
 
   public prefabListContainer: HTMLElement | null = null;
   public prefabItemsContainer: HTMLElement | null = null; 
   public spawnedPrefabsContainer: HTMLElement | null = null;
   public availablePrefabs: string[] = [];
+
+  public excludedNamesArray: string[] = [];
 
   public isPointerLocked: boolean = false;
   public keysPressed: { [key: string]: boolean } = {};
@@ -43,44 +52,15 @@ export default class AssetManager extends RE.Component {
   public tempVector: THREE.Vector3 = new THREE.Vector3();
   public tempEuler: THREE.Euler = new THREE.Euler(0, 0, 0, 'YXZ');
   public domElement: HTMLElement | null = null;
-  public crosshairElement: HTMLDivElement | null = null;
-  public isCrosshairVisible: boolean = false;
+
   public raycaster: THREE.Raycaster = new THREE.Raycaster();
-  public objectMenuContainerElement: HTMLDivElement | null = null;
-  public objectNameElement: HTMLDivElement | null = null;
 
-  // UI elements for position, rotation, and scale
-  public positionXInput: HTMLInputElement | null = null;
-  public positionYInput: HTMLInputElement | null = null;
-  public positionZInput: HTMLInputElement | null = null;
-  public tpToCameraButton: HTMLButtonElement | null = null;
-
-  public rotationXInput: HTMLInputElement | null = null;
-  public rotationYInput: HTMLInputElement | null = null;
-  public rotationZInput: HTMLInputElement | null = null;
-
-  public scaleXInput: HTMLInputElement | null = null;
-  public scaleYInput: HTMLInputElement | null = null;
-  public scaleZInput: HTMLInputElement | null = null;
-
-  public deleteButtonElement: HTMLButtonElement | null = null;
-  public toggleHideButtonElement: HTMLButtonElement | null = null;
-  public selectedObject: THREE.Object3D | null = null; // This will now always be the prefab root
-  public excludedNamesArray: string[] = [];
-  public cameraLocationDisplay: HTMLDivElement | null = null;
-  public saveButtonElement: HTMLButtonElement | null = null;
 
   public onMouseMoveBound = this.onMouseMove.bind(this);
   public onKeyDownBound = this.onKeyDown.bind(this);
   public onKeyUpBound = this.onKeyUp.bind(this);
   public onPointerLockChangeBound = this.onPointerLockChange.bind(this);
   public onLeftClickBound = this.onLeftClick.bind(this);
-  public onDeleteClickBound = this.onDeleteClick.bind(this);
-  public onToggleHideClickBound = this.onToggleHideClick.bind(this);
-  public onPositionInputChangeBound = this.onPositionInputChange.bind(this);
-  public onRotationInputChangeBound = this.onRotationInputChange.bind(this);
-  public onScaleInputChangeBound = this.onScaleInputChange.bind(this);
-  public onTpToCameraClickBound = this.onTpToCameraClick.bind(this);
   public toggleAllUIBound = this.toggleAllUI.bind(this);
   public onPrefabWheelBound = this.onPrefabWheel.bind(this);
   public onRightClickBound = this.onRightClick.bind(this);
@@ -137,10 +117,10 @@ export default class AssetManager extends RE.Component {
 
       this.domElement = RE.Runtime.rogueDOMContainer;
       if (this.domElement) {
-        this.createCrosshair();
-        this.createObjectMenuUI();
+        AM_UI.createCrosshair();
+        AM_UI.createObjectMenuUI();
         this.createSaveButton();
-        this.createCameraLocationDisplay();
+        AM_UI.createCameraLocationDisplay();
         document.addEventListener('mousemove', this.onMouseMoveBound);
         document.addEventListener('keydown', this.onKeyDownBound);
         document.addEventListener('keyup', this.onKeyUpBound);
@@ -161,7 +141,7 @@ export default class AssetManager extends RE.Component {
 
     }
 
-    await AM_JsonLoader.loadPrefabs();
+    await this.initPrefabSystem();
 
     if (this.editorMode) {
       this.createPrefabListUI();
@@ -184,312 +164,84 @@ export default class AssetManager extends RE.Component {
     })
   }
 
-  /**
-   * Creates the crosshair UI element and appends it to the DOM.
+
+    /**
+   * Called every frame to update camera movement and rotation.
    */
-  private createCrosshair() {
-    this.crosshairElement = document.createElement('div');
-    this.crosshairElement.id = 'rogue-engine-crosshair';
-    this.crosshairElement.style.position = 'absolute';
-    this.crosshairElement.style.top = '50%';
-    this.crosshairElement.style.left = '50%';
-    this.crosshairElement.style.transform = 'translate(-50%, -50%)';
-    this.crosshairElement.style.pointerEvents = 'none';
-    this.crosshairElement.style.zIndex = '1000';
-    this.crosshairElement.style.width = '2px';
-    this.crosshairElement.style.height = '2px';
-    this.crosshairElement.style.backgroundColor = 'transparent';
-
-    const lineHeight = '5px';
-    const lineThickness = '0.5px';
-    const lineColor = 'white';
-
-    this.crosshairElement.style.boxShadow = `
-      0 ${lineHeight} 0 ${lineThickness} ${lineColor},
-      0 -${lineHeight} 0 ${lineThickness} ${lineColor},
-      ${lineHeight} 0 0 ${lineThickness} ${lineColor},
-      -${lineHeight} 0 0 ${lineThickness} ${lineColor}
-    `;
-
-    if (this.domElement) {
-      this.domElement.appendChild(this.crosshairElement);
-    }
-  }
-
-  /**
-   * Sets the visibility of the crosshair element.
-   * @param visible True to show the crosshair, false to hide it.
-   */
-  private setCrosshairVisibility(visible: boolean) {
-    if (this.crosshairElement) {
-      this.crosshairElement.style.display = visible ? 'block' : 'none';
-      this.isCrosshairVisible = visible;
-    }
-  }
-
-  /**
-   * Helper to create a styled input field.
-   * @param id The ID for the input.
-   * @param onInputChange The event listener for input changes.
-   * @returns The created HTMLInputElement.
-   */
-  private createStyledInputField(id: string, onInputChange: (event: Event) => void): HTMLInputElement {
-    const input = document.createElement('input');
-    input.type = 'text'; // Use 'text' to remove arrows
-    input.autocomplete = 'off'; // Disable autocompletion
-    input.id = id;
-    input.style.width = '60px'; // Adjusted width for inline layout
-    input.style.padding = '5px';
-    input.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
-    input.style.color = 'white';
-    input.style.border = '1px solid rgba(255, 255, 255, 0.3)';
-    input.style.borderRadius = '4px';
-    input.style.textAlign = 'center';
-    // Use setProperty for vendor-prefixed properties and to avoid TS errors
-    (input.style as any).MozAppearance = 'textfield';
-    (input.style as any).WebkitAppearance = 'none';
-    input.style.appearance = 'none'; // Standard arrow removal
-
-    // Remove spin buttons in Chrome, Safari, Edge
-    input.style.setProperty('-webkit-outer-spin-button', 'none', 'important');
-    input.style.setProperty('-webkit-inner-spin-button', 'none', 'important');
-
-    input.addEventListener('input', onInputChange);
-    // Allow Ctrl+A to select all
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
-        input.select();
-      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-        e.preventDefault(); // Prevent page scroll
-        const currentValue = parseFloat(input.value);
-        let step = 1;
-        if (e.shiftKey) step = 10;
-        if (e.altKey) step = 0.1;
-
-        if (!isNaN(currentValue)) {
-          const newValue = e.key === 'ArrowUp' ? currentValue + step : currentValue - step;
-          input.value = newValue.toFixed(2);
-          onInputChange(new Event('input')); // Trigger update
+    public update() {
+      if (!this.camera || !this.isPointerLocked) {
+        AM_UI.updateCameraLocationDisplay();
+        return;
+      }
+  
+      const deltaTime = RE.Runtime.deltaTime;
+  
+      // Apply rotation smoothing if enabled, otherwise directly copy
+      if (this.rotationSmoothingSpeed > 0) {
+        const maxAngularStep = THREE.MathUtils.degToRad(this.rotationSmoothingSpeed) * deltaTime;
+        this.camera.quaternion.rotateTowards(this.targetQuaternion, maxAngularStep);
+      } else {
+        this.camera.quaternion.copy(this.targetQuaternion);
+      }
+  
+      const baseMoveDistance = this.movementSpeed * deltaTime;
+      let currentMoveDistance = baseMoveDistance;
+      // Apply speed boost if boost key is pressed
+      if (this.keysPressed[this.boostKey]) {
+        currentMoveDistance *= this.speedMultiplier;
+      }
+  
+      const movementVector = this.tempVector.set(0, 0, 0);
+      // Get camera's forward and right vectors
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+      const globalUp = new THREE.Vector3(0, 1, 0); // Global up direction for flying
+  
+      // Accumulate movement based on pressed keys
+      if (this.keysPressed[this.forwardKey]) {
+        movementVector.add(forward);
+      }
+      if (this.keysPressed[this.backwardKey]) {
+        movementVector.sub(forward);
+      }
+      if (this.keysPressed[this.strafeLeftKey]) {
+        movementVector.sub(right);
+      }
+      if (this.keysPressed[this.strafeRightKey]) {
+        movementVector.add(right);
+      }
+      if (this.keysPressed[this.flyUpKey1] || this.keysPressed[this.flyUpKey2]) {
+        movementVector.add(globalUp);
+      }
+      if (this.keysPressed[this.flyDownKey1] || this.keysPressed[this.flyDownKey2]) {
+        movementVector.sub(globalUp);
+      }
+  
+      // Normalize horizontal movement to prevent faster diagonal movement
+      const horizontalMovementSq = movementVector.x * movementVector.x + movementVector.z * movementVector.z;
+      const verticalMovement = movementVector.y;
+  
+      if (horizontalMovementSq > 0) {
+        const horizontalMagnitude = Math.sqrt(horizontalMovementSq);
+        if (horizontalMagnitude > 1) {
+          movementVector.x /= horizontalMagnitude;
+          movementVector.z /= horizontalMagnitude;
         }
       }
-    });
-    input.onfocus = () => { input.select(); }; // Select all text on focus
-
-    return input;
-  }
-
-  /**
-   * Creates a group of X, Y, Z input fields on a single line.
-   * @param titleText The title for the group (e.g., "Position", "Rotation", "Scale").
-   * @param onInputChange The event listener for changes in any of the group's inputs.
-   * @param includeTpButton If true, adds a "TP to Camera" button (only for Position).
-   * @returns An object containing the container and references to the X, Y, Z inputs.
-   */
-  private createVector3InputGroup(titleText: string, onInputChange: (event: Event) => void, includeTpButton: boolean = false) {
-    const groupContainer = document.createElement('div');
-    groupContainer.style.width = '100%';
-    groupContainer.style.marginBottom = '5px'; // Reduced margin
-    groupContainer.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
-    groupContainer.style.padding = '8px'; // Reduced padding
-    groupContainer.style.borderRadius = '5px';
-
-    const title = document.createElement('div');
-    title.textContent = titleText;
-    title.style.fontWeight = 'bold';
-    title.style.marginBottom = '5px'; // Reduced margin
-    groupContainer.appendChild(title);
-
-    const inputsWrapper = document.createElement('div');
-    inputsWrapper.style.display = 'flex';
-    inputsWrapper.style.justifyContent = 'space-between';
-    inputsWrapper.style.alignItems = 'center';
-    inputsWrapper.style.gap = '8px'; // Reduced gap between X, Y, Z sections
-    groupContainer.appendChild(inputsWrapper); // Corrected: use groupContainer here
-
-    const createAxisInput = (axis: string, id: string) => {
-      const axisContainer = document.createElement('div');
-      axisContainer.style.display = 'flex';
-      axisContainer.style.alignItems = 'center';
-      axisContainer.style.gap = '2px';
-
-      const label = document.createElement('span');
-      label.textContent = `${axis}:`;
-      label.style.fontSize = '12px';
-      axisContainer.appendChild(label);
-
-      const input = this.createStyledInputField(id, onInputChange);
-      axisContainer.appendChild(input);
-      return { container: axisContainer, input: input };
-    };
-
-    const xField = createAxisInput('X', `${titleText.toLowerCase()}X`);
-    const yField = createAxisInput('Y', `${titleText.toLowerCase()}Y`);
-    const zField = createAxisInput('Z', `${titleText.toLowerCase()}Z`);
-
-    inputsWrapper.appendChild(xField.container);
-    inputsWrapper.appendChild(yField.container);
-    inputsWrapper.appendChild(zField.container);
-
-    let tpButton: HTMLButtonElement | null = null;
-    if (includeTpButton) {
-      tpButton = document.createElement('button');
-      tpButton.textContent = 'TP to Camera';
-      tpButton.style.padding = '5px 8px'; // Reduced padding for button
-      tpButton.style.backgroundColor = '#28a745'; // Green color
-      tpButton.style.color = 'white';
-      tpButton.style.border = 'none';
-      tpButton.style.borderRadius = '4px';
-      tpButton.style.cursor = 'pointer';
-      tpButton.style.fontSize = '11px'; // Slightly smaller font
-      tpButton.style.marginTop = '8px'; // Space below inputs
-      tpButton.addEventListener('click', this.onTpToCameraClickBound);
-      groupContainer.appendChild(tpButton);
-      groupContainer.style.display = 'flex';
-      groupContainer.style.flexDirection = 'column';
-      groupContainer.style.alignItems = 'flex-start';
+      movementVector.y = verticalMovement; // Preserve vertical movement
+  
+      // Apply the calculated movement to the camera's position
+      this.camera.position.addScaledVector(movementVector, currentMoveDistance);
+      AM_UI.updateCameraLocationDisplay();
+      this.updatePrefabVisibility();
     }
 
-    return {
-      groupContainer,
-      xInput: xField.input,
-      yInput: yField.input,
-      zInput: zField.input,
-      tpButton: tpButton
-    };
-  }
 
 
-  /**
-   * Creates the UI elements for the object interaction menu (delete, hide/show, and transforms).
-   */
-  private createObjectMenuUI() {
-    // Cleanup existing UI first
-    if (this.objectMenuContainerElement) {
-      this.objectMenuContainerElement.innerHTML = '';
-      if (this.domElement && this.objectMenuContainerElement.parentNode === this.domElement) {
-        this.domElement.removeChild(this.objectMenuContainerElement);
-      }
-      this.objectMenuContainerElement = null;
-    }
-
-    this.objectMenuContainerElement = document.createElement('div');
-    this.objectMenuContainerElement.id = 'rogue-engine-object-menu';
-    this.objectMenuContainerElement.style.position = 'fixed';
-    this.objectMenuContainerElement.style.right = '20px';
-    this.objectMenuContainerElement.style.top = '20px';
-    this.objectMenuContainerElement.style.pointerEvents = 'auto';
-    this.objectMenuContainerElement.style.zIndex = '1001';
-    this.objectMenuContainerElement.style.backgroundColor = 'rgba(0, 0, 0, 0.8)';
-    this.objectMenuContainerElement.style.color = 'white';
-    this.objectMenuContainerElement.style.padding = '15px';
-    this.objectMenuContainerElement.style.borderRadius = '8px';
-    this.objectMenuContainerElement.style.fontFamily = 'sans-serif';
-    this.objectMenuContainerElement.style.fontSize = '14px';
-    this.objectMenuContainerElement.style.display = 'none';
-    this.objectMenuContainerElement.style.flexDirection = 'column';
-    this.objectMenuContainerElement.style.gap = '10px';
-    this.objectMenuContainerElement.style.minWidth = '300px';
-    this.objectMenuContainerElement.style.backdropFilter = 'blur(5px)';
-    this.objectMenuContainerElement.addEventListener('click', (e) => e.stopPropagation());
-
-    const title = document.createElement('div');
-    title.id = 'object-menu-title';
-    title.style.fontWeight = 'bold';
-    title.style.marginBottom = '10px';
-    title.textContent = 'Selected: None'; // Add initial placeholder
-    this.objectNameElement = title; // Store reference
-    this.objectMenuContainerElement.appendChild(title);
-
-    const separator1 = document.createElement('hr');
-    separator1.style.width = '100%';
-    separator1.style.borderColor = 'rgba(255, 255, 255, 0.3)';
-    separator1.style.margin = '8px 0'; // Reduced margin
-    this.objectMenuContainerElement.appendChild(separator1);
-
-    // Position inputs
-    const positionGroup = this.createVector3InputGroup('Position', this.onPositionInputChangeBound, true); // true for TP button
-    this.objectMenuContainerElement.appendChild(positionGroup.groupContainer);
-    this.positionXInput = positionGroup.xInput;
-    this.positionYInput = positionGroup.yInput;
-    this.positionZInput = positionGroup.zInput;
-    this.tpToCameraButton = positionGroup.tpButton;
 
 
-    // Rotation inputs
-    const rotationGroup = this.createVector3InputGroup('Rotation (Deg)', this.onRotationInputChangeBound);
-    this.objectMenuContainerElement.appendChild(rotationGroup.groupContainer);
-    this.rotationXInput = rotationGroup.xInput;
-    this.rotationYInput = rotationGroup.yInput;
-    this.rotationZInput = rotationGroup.zInput;
 
-    // Scale inputs
-    const scaleGroup = this.createVector3InputGroup('Scale', this.onScaleInputChangeBound);
-    this.objectMenuContainerElement.appendChild(scaleGroup.groupContainer);
-    this.scaleXInput = scaleGroup.xInput;
-    this.scaleYInput = scaleGroup.yInput;
-    this.scaleZInput = scaleGroup.zInput;
 
-    // Render Distance input
-    const renderDistanceGroup = this.createRenderDistanceInput();
-    this.objectMenuContainerElement.appendChild(renderDistanceGroup);
-
-    const separator2 = document.createElement('hr');
-    separator2.style.width = '100%';
-    separator2.style.borderColor = 'rgba(255, 255, 255, 0.3)';
-    separator2.style.margin = '8px 0'; // Reduced margin
-    this.objectMenuContainerElement.appendChild(separator2);
-
-    this.deleteButtonElement = document.createElement('button');
-    this.deleteButtonElement.textContent = 'Delete Object';
-    this.styleButton(this.deleteButtonElement, '#e74c3c');
-    this.deleteButtonElement.addEventListener('click', this.onDeleteClickBound);
-    this.objectMenuContainerElement.appendChild(this.deleteButtonElement);
-
-    this.toggleHideButtonElement = document.createElement('button');
-    this.toggleHideButtonElement.textContent = 'Toggle Hide';
-    this.styleButton(this.toggleHideButtonElement, '#3498db');
-    this.toggleHideButtonElement.addEventListener('click', this.onToggleHideClickBound);
-    this.objectMenuContainerElement.appendChild(this.toggleHideButtonElement);
-
-    const savePrefabButton = this.createButton('Save Prefab', () => this.saveSelectedPrefab());
-    this.objectMenuContainerElement.appendChild(savePrefabButton);
-
-    if (this.domElement) {
-      this.domElement.appendChild(this.objectMenuContainerElement);
-    }
-  }
-
-  private createRenderDistanceInput() {
-    const container = document.createElement('div');
-    container.style.margin = '10px 0';
-    container.style.display = 'flex';
-    container.style.alignItems = 'center';
-    container.style.gap = '10px';
-
-    const label = document.createElement('label');
-    label.textContent = 'Render Distance:';
-    label.style.fontWeight = 'bold';
-    label.style.color = '#ffffff';
-    container.appendChild(label);
-
-    const input = this.createStyledInputField('render-distance', (e) => {
-      this.onRenderDistanceChange(e);
-    });
-    input.type = 'number';
-    input.step = '0.1';
-    input.style.margin = '0';
-    input.style.width = '120px';
-    container.appendChild(input);
-
-    return container;
-  }
-
-  private onRenderDistanceChange(event: Event) {
-    if (!this.selectedObject) return;
-    const input = event.target as HTMLInputElement;
-    const value = parseFloat(input.value);
-    AssetManager.setRenderDistance(this.selectedObject.uuid, value);
-  }
 
   private createSaveButton(): HTMLButtonElement {
     const button = document.createElement('button');
@@ -504,84 +256,17 @@ export default class AssetManager extends RE.Component {
     button.style.minWidth = '140px';
     button.style.maxWidth = '200px';
     button.style.borderRadius = '4px';
-    this.styleButton(button, '#4CAF50');
+    AM_UI.styleButton(button, '#4CAF50');
     button.addEventListener('click', () => AM_JsonLoader.savePrefabs());
     if (this.domElement) {
       this.domElement.appendChild(button);
     }
-    this.saveButtonElement = button;
+    AM_UI.saveButtonElement = button;
     return button;
   }
 
-  /**
-   * Creates and appends the camera location display UI element.
-   */
-  private createCameraLocationDisplay() {
-    this.cameraLocationDisplay = document.createElement('div');
-    this.cameraLocationDisplay.id = 'rogue-engine-camera-location';
-    this.cameraLocationDisplay.style.position = 'fixed';
-    this.cameraLocationDisplay.style.bottom = '10px';
-    this.cameraLocationDisplay.style.left = '10px';
-    this.cameraLocationDisplay.style.pointerEvents = 'none';
-    this.cameraLocationDisplay.style.zIndex = '1000';
-    this.cameraLocationDisplay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-    this.cameraLocationDisplay.style.color = 'white';
-    this.cameraLocationDisplay.style.padding = '8px 12px';
-    this.cameraLocationDisplay.style.borderRadius = '5px';
-    this.cameraLocationDisplay.style.fontFamily = 'monospace';
-    this.cameraLocationDisplay.style.fontSize = '12px';
-    this.cameraLocationDisplay.style.backdropFilter = 'blur(3px)';
-  }
 
-  /**
-   * Updates the displayed camera location in the UI.
-   */
-  private updateCameraLocationDisplay() {
-    if (this.camera && this.cameraLocationDisplay) {
-      const pos = this.camera.position;
-      this.cameraLocationDisplay.textContent = `X: ${pos.x.toFixed(2)}, Y: ${pos.y.toFixed(2)}, Z: ${pos.z.toFixed(2)}`;
-    }
-  }
 
-  /**
-   * Applies common styles to a given HTML button element.
-   * @param button The button element to style.
-   * @param backgroundColor The background color for the button.
-   */
-  private styleButton(button: HTMLButtonElement, backgroundColor: string) {
-    button.style.display = 'block';
-    button.style.width = 'auto';
-    button.style.padding = '8px 16px';
-    button.style.minWidth = '140px';
-    button.style.maxWidth = '200px';
-    button.style.backgroundColor = backgroundColor;
-    button.style.color = 'white';
-    button.style.border = 'none';
-    button.style.borderRadius = '4px';
-    button.style.cursor = 'pointer';
-    button.style.fontSize = '13px';
-    button.style.textAlign = 'center';
-    button.style.transition = 'background-color 0.2s';
-
-    button.addEventListener('mouseover', () => {
-      button.style.backgroundColor = '#555';
-    });
-    button.addEventListener('mouseout', () => {
-      button.style.backgroundColor = backgroundColor;
-    });
-  }
-
-  private createButton(text: string, onClick: () => void): HTMLButtonElement {
-    const button = document.createElement('button');
-    button.textContent = text;
-    button.style.padding = '8px 16px';
-    button.style.minWidth = '140px';
-    button.style.maxWidth = '200px';
-    button.style.borderRadius = '4px';
-    this.styleButton(button, '#4CAF50');
-    button.addEventListener('click', onClick);
-    return button;
-  }
 
   /**
    * Parses the comma-separated excluded object names string into an array.
@@ -600,7 +285,7 @@ export default class AssetManager extends RE.Component {
   private onKeyDown(event: KeyboardEvent) {
     const key = event.key.toLowerCase();
     if (key === this.toggleCrosshairKey.toLowerCase()) {
-      this.setCrosshairVisibility(!this.isCrosshairVisible);
+      AM_UI.setCrosshairVisibility(!AM_UI.isCrosshairVisible);
       event.preventDefault();
       return;
     }
@@ -766,21 +451,21 @@ export default class AssetManager extends RE.Component {
         console.log('Scale:', prefabRoot.scale); 
         console.log('Hierarchy:', this.getObjectHierarchy(prefabRoot));
         console.groupEnd();
-        this.selectedObject = prefabRoot; // Select the root of the prefab
+        AM_UI.selectedObject = prefabRoot; // Select the root of the prefab
         this.showObjectMenu(prefabRoot);
         this.updateTransformInputs();
       } else {
         // If a spawned part was hit but no identifiable prefab root, hide menu
-        if (this.objectMenuContainerElement) {
-          this.objectMenuContainerElement.style.display = 'none';
+        if (AM_UI.objectMenuContainerElement) {
+          AM_UI.objectMenuContainerElement.style.display = 'none';
         }
-        this.selectedObject = null;
+        AM_UI.selectedObject = null;
       }
     } else {
       // If no valid object is hit, hide the object menu
-      if (this.objectMenuContainerElement) {
-        this.objectMenuContainerElement.style.display = 'none';
-        this.selectedObject = null;
+      if (AM_UI.objectMenuContainerElement) {
+        AM_UI.objectMenuContainerElement.style.display = 'none';
+        AM_UI.selectedObject = null;
       }
     }
   }
@@ -791,7 +476,7 @@ export default class AssetManager extends RE.Component {
   private onRightClick(event: MouseEvent) {
     event.preventDefault();
 
-    if (!this.camera || !this.objectMenuContainerElement) return;
+    if (!this.camera || !AM_UI.objectMenuContainerElement) return;
 
     // Raycast from screen center (crosshair position)
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
@@ -834,232 +519,22 @@ export default class AssetManager extends RE.Component {
         console.log('Scale:', prefabRoot.scale); 
         console.log('Hierarchy:', this.getObjectHierarchy(prefabRoot));
         console.groupEnd();
-        this.selectedObject = prefabRoot;
+        AM_UI.selectedObject = prefabRoot;
         this.showObjectMenu(prefabRoot);
         this.updateTransformInputs();
         
         // Position menu at click location for right-click
-        if (this.objectMenuContainerElement) {
-          this.objectMenuContainerElement.style.left = `${event.clientX}px`;
-          this.objectMenuContainerElement.style.top = `${event.clientY}px`;
+        if (AM_UI.objectMenuContainerElement) {
+          AM_UI.objectMenuContainerElement.style.left = `${event.clientX}px`;
+          AM_UI.objectMenuContainerElement.style.top = `${event.clientY}px`;
         }
       }
     } else {
-      this.objectMenuContainerElement.style.display = 'none';
-      this.selectedObject = null;
+      AM_UI.objectMenuContainerElement.style.display = 'none';
+      AM_UI.selectedObject = null;
     }
   }
 
-  /**
-   * Updates object menu transform values from a selected object
-   */
-  private updateObjectMenuTransformValues(object: THREE.Object3D) {
-    const worldPosition = new THREE.Vector3();
-    const worldQuaternion = new THREE.Quaternion();
-    const worldScale = new THREE.Vector3();
-    object.getWorldPosition(worldPosition);
-    object.getWorldQuaternion(worldQuaternion);
-    object.getWorldScale(worldScale);
-    const worldRotation = new THREE.Euler().setFromQuaternion(worldQuaternion);
-
-    if (this.objectNameElement) {
-      this.objectNameElement.textContent = `Object: ${object.name || "[Unnamed]"}`;
-    }
-
-    // Update position inputs
-    if (this.positionXInput) this.positionXInput.value = worldPosition.x.toFixed(2);
-    if (this.positionYInput) this.positionYInput.value = worldPosition.y.toFixed(2);
-    if (this.positionZInput) this.positionZInput.value = worldPosition.z.toFixed(2);
-
-    // Update rotation inputs
-    if (this.rotationXInput) this.rotationXInput.value = THREE.MathUtils.radToDeg(worldRotation.x).toFixed(2);
-    if (this.rotationYInput) this.rotationYInput.value = THREE.MathUtils.radToDeg(worldRotation.y).toFixed(2);
-    if (this.rotationZInput) this.rotationZInput.value = THREE.MathUtils.radToDeg(worldRotation.z).toFixed(2);
-
-    // Update scale inputs
-    if (this.scaleXInput) this.scaleXInput.value = worldScale.x.toFixed(2);
-    if (this.scaleYInput) this.scaleYInput.value = worldScale.y.toFixed(2);
-    if (this.scaleZInput) this.scaleZInput.value = worldScale.z.toFixed(2);
-
-    if (this.toggleHideButtonElement) {
-      this.toggleHideButtonElement.textContent = object.visible ? 'Hide Object' : 'Show Object';
-    }
-  }
-
-  /**
-   * Helper to set object's world position from UI inputs.
-   * This is crucial for handling objects that might have parents.
-   * @param object The THREE.Object3D to modify.
-   * @param x The desired X world coordinate.
-   * @param y The desired Y world coordinate.
-   * @param z The desired Z world coordinate.
-   */
-  private setObjectWorldPosition(object: THREE.Object3D, x: number, y: number, z: number) {
-    const newWorldPosition = new THREE.Vector3(x, y, z);
-    if (object.parent) {
-        // Convert world position to local position relative to parent
-        object.parent.worldToLocal(newWorldPosition);
-    }
-    object.position.copy(newWorldPosition);
-    object.updateMatrixWorld(true); // Ensure world matrix is updated immediately
-  }
-
-  /**
-   * Helper to set object's world rotation from UI inputs (degrees).
-   * @param object The THREE.Object3D to modify.
-   * @param xDeg The desired X world rotation in degrees.
-   * @param yDeg The desired Y world rotation in degrees.
-   * @param zDeg The desired Z world rotation in degrees.
-   */
-  private setObjectWorldRotation(object: THREE.Object3D, xDeg: number, yDeg: number, zDeg: number) {
-    const newWorldEuler = new THREE.Euler(
-        THREE.MathUtils.degToRad(xDeg),
-        THREE.MathUtils.degToRad(yDeg),
-        THREE.MathUtils.degToRad(zDeg),
-        'YXZ' // Or 'XYZ' depending on desired rotation order
-    );
-    const newWorldQuaternion = new THREE.Quaternion().setFromEuler(newWorldEuler);
-
-    if (object.parent) {
-        // Get parent's world inverse quaternion
-        const parentWorldQuaternionInverse = object.parent.getWorldQuaternion(new THREE.Quaternion()).invert();
-        // Calculate local quaternion
-        newWorldQuaternion.premultiply(parentWorldQuaternionInverse);
-    }
-    object.quaternion.copy(newWorldQuaternion);
-    object.updateMatrixWorld(true);
-  }
-
-  /**
-   * Helper to set object's world scale from UI inputs.
-   * This is more complex if parents have non-uniform scale.
-   * For simplicity, this assumes direct children of the scene or parents with uniform scale.
-   * @param object The THREE.Object3D to modify.
-   * @param x The desired X world scale.
-   * @param y The desired Y world scale.
-   * @param z The desired Z world scale.
-   */
-  private setObjectWorldScale(object: THREE.Object3D, x: number, y: number, z: number) {
-      const currentWorldScale = new THREE.Vector3();
-      object.getWorldScale(currentWorldScale);
-
-      // Calculate ratios of desired world scale to current world scale
-      const ratioX = x / currentWorldScale.x;
-      const ratioY = y / currentWorldScale.y;
-      const ratioZ = z / currentWorldScale.z;
-
-      // Apply these ratios to the local scale
-      object.scale.x *= ratioX;
-      object.scale.y *= ratioY;
-      object.scale.z *= ratioZ;
-      object.updateMatrixWorld(true);
-  }
-
-
-  /**
-   * Handles changes in the position input fields.
-   */
-  private onPositionInputChange() {
-    if (this.selectedObject) {
-      const xValue = this.positionXInput?.value;
-      const yValue = this.positionYInput?.value;
-      const zValue = this.positionZInput?.value;
-
-      this.setObjectWorldPosition(
-        this.selectedObject,
-        parseFloat(xValue!),
-        parseFloat(yValue!),
-        parseFloat(zValue!)
-      );
-      AssetManager.updatePrefabTransform(
-        this.selectedObject.uuid,
-        this.selectedObject.position,
-        this.selectedObject.rotation,
-        this.selectedObject.scale
-      );
-    }
-  }
-
-  /**
-   * Handles changes in the rotation input fields.
-   */
-  private onRotationInputChange() {
-    if (this.selectedObject) {
-      this.setObjectWorldRotation(
-        this.selectedObject,
-        parseFloat(this.rotationXInput!.value),
-        parseFloat(this.rotationYInput!.value),
-        parseFloat(this.rotationZInput!.value)
-      );
-      AssetManager.updatePrefabTransform(
-        this.selectedObject.uuid,
-        this.selectedObject.position,
-        this.selectedObject.rotation,
-        this.selectedObject.scale
-      );
-    }
-  }
-
-  /**
-   * Handles changes in the scale input fields.
-   */
-  private onScaleInputChange() {
-    if (this.selectedObject) {
-      const xValue = this.scaleXInput?.value;
-      const yValue = this.scaleYInput?.value;
-      const zValue = this.scaleZInput?.value;
-
-      this.setObjectWorldScale(
-        this.selectedObject,
-        parseFloat(xValue!),
-        parseFloat(yValue!),
-        parseFloat(zValue!)
-      );
-      AssetManager.updatePrefabTransform(
-        this.selectedObject.uuid,
-        this.selectedObject.position,
-        this.selectedObject.rotation,
-        this.selectedObject.scale
-      );
-    }
-  }
-
-  /**
-   * Handles the "TP to Camera" button click event.
-   */
-  private onTpToCameraClick() {
-    if (this.selectedObject && this.camera && this.positionXInput && this.positionYInput && this.positionZInput) {
-      // Set object's world position to camera's world position
-      this.setObjectWorldPosition(this.selectedObject, this.camera.position.x, this.camera.position.y, this.camera.position.z);
-      // Also match the object's world rotation to the camera's world rotation
-
-      // Update the UI input fields to reflect the new *world* transform values after the update
-      const worldPosition = new THREE.Vector3();
-      const worldQuaternion = new THREE.Quaternion();
-      const worldScale = new THREE.Vector3();
-      this.selectedObject.getWorldPosition(worldPosition);
-      this.selectedObject.getWorldQuaternion(worldQuaternion);
-      this.selectedObject.getWorldScale(worldScale);
-      const worldRotation = new THREE.Euler().setFromQuaternion(worldQuaternion);
-
-      if (this.positionXInput) this.positionXInput.value = worldPosition.x.toFixed(2);
-      if (this.positionYInput) this.positionYInput.value = worldPosition.y.toFixed(2);
-      if (this.positionZInput) this.positionZInput.value = worldPosition.z.toFixed(2);
-
-      if (this.rotationXInput) this.rotationXInput.value = THREE.MathUtils.radToDeg(worldRotation.x).toFixed(2);
-      if (this.rotationYInput) this.rotationYInput.value = THREE.MathUtils.radToDeg(worldRotation.y).toFixed(2);
-      if (this.rotationZInput) this.rotationZInput.value = THREE.MathUtils.radToDeg(worldRotation.z).toFixed(2);
-
-      // Update prefabMap
-      const entry = AssetManager.prefabMap.get(this.selectedObject.uuid);
-      if (entry) {
-        entry.position.copy(this.selectedObject.position);
-        entry.rotation.copy(this.selectedObject.rotation);
-        entry.scale.copy(this.selectedObject.scale);
-        AssetManager.prefabMap.set(this.selectedObject.uuid, entry);
-      }
-    }
-  }
 
   /**
    * Checks if an object's name is in the excluded list.
@@ -1072,45 +547,6 @@ export default class AssetManager extends RE.Component {
     return this.excludedNamesArray.includes(lowerCaseName);
   }
 
-  /**
-   * Handles the click event for the delete object button.
-   */
-  private onDeleteClick() {
-    this.deleteSelectedObject();
-  }
-
-  private deleteSelectedObject() {
-    if (this.selectedObject) {
-      // Find and remove from spawnedPrefabs
-      for (const [uuid, prefab] of this.spawnedPrefabs) {
-        if (prefab === this.selectedObject) {
-          this.deleteSpawnedPrefab(uuid);
-          break;
-        }
-      }
-      if (this.objectMenuContainerElement) {
-        this.objectMenuContainerElement.style.display = 'none';
-      }
-      this.selectedObject = null;
-    }
-  }
-
-  /**
-   * Handles the click event for the toggle hide/show object button.
-   */
-  private onToggleHideClick() {
-    if (this.selectedObject) {
-      const uuid = this.selectedObject.uuid;
-      const entry = AssetManager.prefabMap.get(uuid);
-      if (entry) {
-        entry.isHidden = !entry.isHidden;
-      }
-      this.selectedObject.visible = !entry!.isHidden;
-      if (this.toggleHideButtonElement) {
-        this.toggleHideButtonElement.textContent = this.selectedObject.visible ? 'Hide Object' : 'Show Object';
-      }
-    }
-  }
 
   /**
    * Handles changes in the pointer lock state.
@@ -1130,76 +566,6 @@ export default class AssetManager extends RE.Component {
     }
   }
 
-  /**
-   * Called every frame to update camera movement and rotation.
-   */
-  public update() {
-    if (!this.camera || !this.isPointerLocked) {
-      this.updateCameraLocationDisplay();
-      return;
-    }
-
-    const deltaTime = RE.Runtime.deltaTime;
-
-    // Apply rotation smoothing if enabled, otherwise directly copy
-    if (this.rotationSmoothingSpeed > 0) {
-      const maxAngularStep = THREE.MathUtils.degToRad(this.rotationSmoothingSpeed) * deltaTime;
-      this.camera.quaternion.rotateTowards(this.targetQuaternion, maxAngularStep);
-    } else {
-      this.camera.quaternion.copy(this.targetQuaternion);
-    }
-
-    const baseMoveDistance = this.movementSpeed * deltaTime;
-    let currentMoveDistance = baseMoveDistance;
-    // Apply speed boost if boost key is pressed
-    if (this.keysPressed[this.boostKey]) {
-      currentMoveDistance *= this.speedMultiplier;
-    }
-
-    const movementVector = this.tempVector.set(0, 0, 0);
-    // Get camera's forward and right vectors
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
-    const globalUp = new THREE.Vector3(0, 1, 0); // Global up direction for flying
-
-    // Accumulate movement based on pressed keys
-    if (this.keysPressed[this.forwardKey]) {
-      movementVector.add(forward);
-    }
-    if (this.keysPressed[this.backwardKey]) {
-      movementVector.sub(forward);
-    }
-    if (this.keysPressed[this.strafeLeftKey]) {
-      movementVector.sub(right);
-    }
-    if (this.keysPressed[this.strafeRightKey]) {
-      movementVector.add(right);
-    }
-    if (this.keysPressed[this.flyUpKey1] || this.keysPressed[this.flyUpKey2]) {
-      movementVector.add(globalUp);
-    }
-    if (this.keysPressed[this.flyDownKey1] || this.keysPressed[this.flyDownKey2]) {
-      movementVector.sub(globalUp);
-    }
-
-    // Normalize horizontal movement to prevent faster diagonal movement
-    const horizontalMovementSq = movementVector.x * movementVector.x + movementVector.z * movementVector.z;
-    const verticalMovement = movementVector.y;
-
-    if (horizontalMovementSq > 0) {
-      const horizontalMagnitude = Math.sqrt(horizontalMovementSq);
-      if (horizontalMagnitude > 1) {
-        movementVector.x /= horizontalMagnitude;
-        movementVector.z /= horizontalMagnitude;
-      }
-    }
-    movementVector.y = verticalMovement; // Preserve vertical movement
-
-    // Apply the calculated movement to the camera's position
-    this.camera.position.addScaledVector(movementVector, currentMoveDistance);
-    this.updateCameraLocationDisplay();
-    this.updatePrefabVisibility();
-  }
 
   private updatePrefabVisibility() {
     if (!this.camera || !this.prefabListContainer) return;
@@ -1396,6 +762,7 @@ export default class AssetManager extends RE.Component {
 
     try {
       const instance = await RE.Prefab.instantiate(prefabPath);
+      instance.remove();
 
       if (!instance) {
         console.error(`Failed to instantiate prefab from path: ${prefabPath}. Object will not be spawned.`);
@@ -1403,7 +770,7 @@ export default class AssetManager extends RE.Component {
       }
 
       // Add to scene first, so its transformations are relative to the world
-      RE.Runtime.scene.add(instance);
+      //RE.Runtime.scene.add(instance);
 
       // Set position and rotation directly in world coordinates to match the camera
       // Calculate position slightly in front of the camera in world coordinates
@@ -1438,14 +805,15 @@ export default class AssetManager extends RE.Component {
       this.updateSpawnedPrefabsList();
 
       // Automatically select and show UI
-      this.selectedObject = instance;
-      if (!this.objectMenuContainerElement) {
-        this.createObjectMenuUI();
+      AM_UI.selectedObject = instance;
+      if (!AM_UI.objectMenuContainerElement) {
+        AM_UI.createObjectMenuUI();
       }
-      if (this.objectMenuContainerElement) {
-        this.objectMenuContainerElement.style.display = 'flex';
+      if (AM_UI.objectMenuContainerElement) {
+        AM_UI.objectMenuContainerElement.style.display = 'flex';
       }
       this.updateTransformInputs();
+      instance.remove();
 
       console.log(`Spawned prefab from path "${prefabPath}" at camera location.`);
     } catch (error) {
@@ -1457,27 +825,27 @@ export default class AssetManager extends RE.Component {
   }
 
   public updateTransformInputs() {
-    if (!this.selectedObject) return;
+    if (!AM_UI.selectedObject) return;
 
     // Update position
-    if (this.positionXInput) this.positionXInput.value = this.selectedObject.position.x.toFixed(2);
-    if (this.positionYInput) this.positionYInput.value = this.selectedObject.position.y.toFixed(2);
-    if (this.positionZInput) this.positionZInput.value = this.selectedObject.position.z.toFixed(2);
+    if (AM_UI.positionXInput) AM_UI.positionXInput.value = AM_UI.selectedObject.position.x.toFixed(2);
+    if (AM_UI.positionYInput) AM_UI.positionYInput.value = AM_UI.selectedObject.position.y.toFixed(2);
+    if (AM_UI.positionZInput) AM_UI.positionZInput.value = AM_UI.selectedObject.position.z.toFixed(2);
 
     // Update rotation
-    if (this.rotationXInput) this.rotationXInput.value = THREE.MathUtils.radToDeg(this.selectedObject.rotation.x).toFixed(2);
-    if (this.rotationYInput) this.rotationYInput.value = THREE.MathUtils.radToDeg(this.selectedObject.rotation.y).toFixed(2);
-    if (this.rotationZInput) this.rotationZInput.value = THREE.MathUtils.radToDeg(this.selectedObject.rotation.z).toFixed(2);
+    if (AM_UI.rotationXInput) AM_UI.rotationXInput.value = THREE.MathUtils.radToDeg(AM_UI.selectedObject.rotation.x).toFixed(2);
+    if (AM_UI.rotationYInput) AM_UI.rotationYInput.value = THREE.MathUtils.radToDeg(AM_UI.selectedObject.rotation.y).toFixed(2);
+    if (AM_UI.rotationZInput) AM_UI.rotationZInput.value = THREE.MathUtils.radToDeg(AM_UI.selectedObject.rotation.z).toFixed(2);
 
     // Update scale
-    if (this.scaleXInput) this.scaleXInput.value = this.selectedObject.scale.x.toFixed(2);
-    if (this.scaleYInput) this.scaleYInput.value = this.selectedObject.scale.y.toFixed(2);
-    if (this.scaleZInput) this.scaleZInput.value = this.selectedObject.scale.z.toFixed(2);
+    if (AM_UI.scaleXInput) AM_UI.scaleXInput.value = AM_UI.selectedObject.scale.x.toFixed(2);
+    if (AM_UI.scaleYInput) AM_UI.scaleYInput.value = AM_UI.selectedObject.scale.y.toFixed(2);
+    if (AM_UI.scaleZInput) AM_UI.scaleZInput.value = AM_UI.selectedObject.scale.z.toFixed(2);
 
     // Update render distance
     const renderDistanceInput = document.querySelector<HTMLInputElement>('#render-distance');
     if (renderDistanceInput) {
-      const entry = AssetManager.prefabMap.get(this.selectedObject.uuid);
+      const entry = AssetManager.prefabMap.get(AM_UI.selectedObject.uuid);
       renderDistanceInput.value = entry?.renderDistance?.toFixed(2) || '10000.00';
     }
   }
@@ -1528,7 +896,7 @@ export default class AssetManager extends RE.Component {
     this.targetQuaternion.copy(this.camera.quaternion);
   }
 
-  private deleteSpawnedPrefab(uuid: string) {
+  public deleteSpawnedPrefab(uuid: string) {
     const prefab = this.spawnedPrefabs.get(uuid);
     if (prefab) {
       // Mark as deleted in prefabMap
@@ -1582,7 +950,7 @@ export default class AssetManager extends RE.Component {
     };
 
     // Toggle crosshair
-    toggleElement(this.crosshairElement);
+    toggleElement(AM_UI.crosshairElement);
     
     // Toggle prefab lists
     if (this.prefabListContainer) {
@@ -1593,10 +961,10 @@ export default class AssetManager extends RE.Component {
     }
     
     // Toggle save button
-    toggleElement(this.saveButtonElement);
+    toggleElement(AM_UI.saveButtonElement);
     
     // Toggle object menu
-    toggleElement(this.objectMenuContainerElement);
+    toggleElement(AM_UI.objectMenuContainerElement);
   }
 
   public cleanupUI() {
@@ -1616,16 +984,21 @@ export default class AssetManager extends RE.Component {
     }
   }
 
+  private showPrefab(prefab: THREE.Object3D) {
+    AM_JsonLoader.showPrefab(prefab);
+  }
+
+
   private showObjectMenu(prefab: THREE.Object3D) {
-    this.selectedObject = prefab;
-    if (!this.objectMenuContainerElement) {
-      this.createObjectMenuUI();
+    AM_UI.selectedObject = prefab;
+    if (!AM_UI.objectMenuContainerElement) {
+      AM_UI.createObjectMenuUI();
     }
-    if (this.objectMenuContainerElement) {
-      this.objectMenuContainerElement.style.display = 'flex';
+    if (AM_UI.objectMenuContainerElement) {
+      AM_UI.objectMenuContainerElement.style.display = 'flex';
     }
-    if (this.objectNameElement) {
-      this.objectNameElement.textContent = `Selected: ${prefab.name || 'Unnamed Prefab'}`;
+    if (AM_UI.objectNameElement) {
+      AM_UI.objectNameElement.textContent = `Selected: ${prefab.name || 'Unnamed Prefab'}`;
     }
     this.updateTransformInputs();
   }
@@ -1654,18 +1027,18 @@ export default class AssetManager extends RE.Component {
   private createUIElements() {
     // Existing UI creation logic from your initialization code
     this.createPrefabListUI();
-    this.createObjectMenuUI();
+    AM_UI.createObjectMenuUI();
     this.createSaveButton();
   }
 
-  private saveSelectedPrefab() {
-    if (this.selectedObject) {
-      const uuid = this.selectedObject.uuid;
+  public saveSelectedPrefab() {
+    if (AM_UI.selectedObject) {
+      const uuid = AM_UI.selectedObject.uuid;
       const entry = AssetManager.prefabMap.get(uuid);
       if (entry) {
-        entry.position.copy(this.selectedObject.position);
-        entry.rotation.copy(this.selectedObject.rotation);
-        entry.scale.copy(this.selectedObject.scale);
+        entry.position.copy(AM_UI.selectedObject.position);
+        entry.rotation.copy(AM_UI.selectedObject.rotation);
+        entry.scale.copy(AM_UI.selectedObject.scale);
         AssetManager.prefabMap.set(uuid, entry);
       }
       AM_JsonLoader.savePrefabs();
@@ -1676,7 +1049,7 @@ export default class AssetManager extends RE.Component {
     // Start periodic checks for render distance
     setInterval(() => {
       if (this.camera) {
-        AM_Handler.updateRenderDistances(this.camera.position);
+        AM_JsonLoader.updatePriorityQueue(this.camera.position);
       }
     }, 1000);
   }
@@ -1703,29 +1076,34 @@ export default class AssetManager extends RE.Component {
   }
 
   private startDynamicSpawning() {
-    this.spawnInterval = setInterval(() => {
+    if (this.spawnInterval) clearInterval(this.spawnInterval);
+    
+    const spawnLoop = () => {
       if (!this.activeCameras[0]) return;
       
       const cameraPos = this.activeCameras[0].position;
-      this.prefabPool.forEach(prefab => {
-        if (!prefab.visible && this.isInRenderDistance(prefab.position, cameraPos)) {
+      AM_JsonLoader.updatePriorityQueue(cameraPos);
+      const visiblePrefabs = AM_JsonLoader.getVisiblePrefabs(cameraPos, this.renderDistance);
+
+      visiblePrefabs.forEach(prefabNode => {
+        const prefab = this.prefabPool.find(p => p.uuid === prefabNode.metadata.id);
+        if (prefab && !prefab.visible) {
           this.showPrefab(prefab);
         }
       });
-    }, this.updateInterval);
+
+      requestAnimationFrame(spawnLoop);
+    };
+
+    spawnLoop();
   }
 
-  private isInRenderDistance(pos1: THREE.Vector3, pos2: THREE.Vector3) {
-    return pos1.distanceTo(pos2) < this.renderDistance;
-  }
-
-  private showPrefab(prefab: THREE.Object3D) {
-    prefab.visible = true;
-    RE.Runtime.scene.add(prefab);
-  }
-
-  private hidePrefab(prefab: THREE.Object3D) {
-    prefab.visible = false;
-    RE.Runtime.scene.remove(prefab);
+  private async initPrefabSystem() {
+    await AM_JsonLoader.loadPrefabs();
+    AM_JsonLoader.startSpawningCycle(
+      this.activeCameras,
+      this.renderDistance,
+      this.prefabPool
+    );
   }
 }
