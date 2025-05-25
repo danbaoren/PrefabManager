@@ -1,6 +1,6 @@
 import * as RE from 'rogue-engine';
 import * as THREE from 'three';
-import AssetManager from './AssetManager.re';
+import PrefabManager from './PrefabManager.re';
 
 type PrefabData = {
   pathPrefab: string;
@@ -117,13 +117,13 @@ class Octree {
 }
 
 @RE.registerComponent
-export default class AM_JsonLoader extends RE.Component {
+export default class PM_JsonLoader extends RE.Component {
   private static prefabOctree: Octree;
   private static workerPool: Worker[] = [];
   private static priorityQueue: PriorityQueue<PrefabNode>;
 
   public static savePrefabs() {
-    const prefabs = Array.from(AssetManager.prefabMap.values())
+    const prefabs = Array.from(PrefabManager.prefabMap.values())
       .filter(entry => !entry.isDeleted)
       .map(entry => ({
         pathPrefab: entry.path,
@@ -139,7 +139,7 @@ export default class AM_JsonLoader extends RE.Component {
     const blob = new Blob([JSON.stringify(prefabs, null, 2)], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = AssetManager.get().jsonStaticPath;
+    link.download = PrefabManager.get().jsonStaticPath;
     link.click();
   }
 
@@ -160,11 +160,11 @@ export default class AM_JsonLoader extends RE.Component {
         this.workerPool.push(new Worker('./prefabWorker.ts'));
       }
 
-      const fullPath = RE.getStaticPath(AssetManager.get().jsonStaticPath);
+      const fullPath = RE.getStaticPath(PrefabManager.get().jsonStaticPath);
       const response = await fetch(fullPath);
       const prefabData: PrefabData[] = await response.json();
 
-      AssetManager.prefabMap.clear();
+      PrefabManager.prefabMap.clear();
 
       const prefabInstances: THREE.Object3D[] = [];
 
@@ -183,7 +183,7 @@ export default class AM_JsonLoader extends RE.Component {
             instance.visible = false;
           }
 
-          AssetManager.prefabMap.set(instance.uuid, {
+          PrefabManager.prefabMap.set(instance.uuid, {
             path: data.pathPrefab,
             position,
             rotation,
@@ -201,11 +201,11 @@ export default class AM_JsonLoader extends RE.Component {
           });
           instance.userData.isPrefabRoot = true;
           // Don't add to scene immediately
-          AssetManager.get().spawnedPrefabs.set(instance.uuid, instance);
-          AssetManager.setRenderDistance(instance.uuid, data.renderDistance);
+          PrefabManager.get().spawnedPrefabs.set(instance.uuid, instance);
+          PrefabManager.setRenderDistance(instance.uuid, data.renderDistance);
 
           instance.addEventListener('onUpdate', () => {
-            AssetManager.updatePrefabTransform(
+            PrefabManager.updatePrefabTransform(
               instance.uuid,
               instance.position,
               instance.rotation,
@@ -225,9 +225,9 @@ export default class AM_JsonLoader extends RE.Component {
         RE.Runtime.scene.remove(prefab);
       });
 
-      AssetManager.get().updateSpawnedPrefabsList();
+      PrefabManager.get().updateSpawnedPrefabsList();
       // Delay UI refresh to ensure all elements are loaded
-      setTimeout(() => AssetManager.get().updateSpawnedPrefabsList(), 500);
+      setTimeout(() => PrefabManager.get().updateSpawnedPrefabsList(), 500);
     } catch (error) {
       console.log('Error loading prefabs:', error);
     }
@@ -291,14 +291,14 @@ export default class AM_JsonLoader extends RE.Component {
   }
 
   public static async startSpawningCycle(
-    activeCameras: THREE.Camera[],
+    camera: THREE.Camera,
     renderDistance: number,
     prefabPool: THREE.Object3D[]
   ) {
-    await this.waitForCameras(activeCameras);
+    await this.waitForCameras([camera]);
     
     const spawnLoop = () => {
-      const cameraPos = activeCameras[0].position;
+      const cameraPos = camera.position;
       this.updatePriorityQueue(cameraPos);
       const visiblePrefabs = this.getVisiblePrefabs(cameraPos, renderDistance);
 

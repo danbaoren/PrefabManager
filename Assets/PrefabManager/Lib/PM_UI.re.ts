@@ -1,9 +1,21 @@
 import * as RE from 'rogue-engine';
 import * as THREE from 'three';
-import AssetManager from './AssetManager.re';
+import PrefabManager from './PrefabManager.re';
+import PM_JsonLoader from './PM_JsonLoader.re';
 
 @RE.registerComponent
-export default class AM_UI extends RE.Component {
+export default class PM_UI extends RE.Component {
+
+  awake() {
+    PM_UI.createObjectMenuUI();
+    
+    // Specifically target prefab list container
+    const prefabListContainer = document.getElementById('prefab-list-container');
+    if (prefabListContainer) {
+      prefabListContainer.style.display = 
+        PrefabManager.get().Editor_Mode ? 'block' : 'none';
+    }
+  }
 
   static crosshairElement: HTMLDivElement | null = null;
   static isCrosshairVisible: boolean = false;
@@ -23,20 +35,20 @@ export default class AM_UI extends RE.Component {
     static scaleYInput: HTMLInputElement | null = null;
     static scaleZInput: HTMLInputElement | null = null;
 
-    static onPositionInputChangeBound = AM_UI.onPositionInputChange.bind(AM_UI);
-    static onRotationInputChangeBound = AM_UI.onRotationInputChange.bind(AM_UI);
-    static onScaleInputChangeBound = AM_UI.onScaleInputChange.bind(AM_UI);
+    static onPositionInputChangeBound = PM_UI.onPositionInputChange.bind(PM_UI);
+    static onRotationInputChangeBound = PM_UI.onRotationInputChange.bind(PM_UI);
+    static onScaleInputChangeBound = PM_UI.onScaleInputChange.bind(PM_UI);
 
     static selectedObject: THREE.Object3D | null = null; // This will now always be the prefab root
 
-    static onTpToCameraClickBound = AM_UI.onTpToCameraClick.bind(AM_UI);
+    static onTpToCameraClickBound = PM_UI.onTpToCameraClick.bind(PM_UI);
 
     static deleteButtonElement: HTMLButtonElement | null = null;
     static toggleHideButtonElement: HTMLButtonElement | null = null;
     static cameraLocationDisplay: HTMLDivElement | null = null;
     static saveButtonElement: HTMLButtonElement | null = null;
-    static onDeleteClickBound = AM_UI.onDeleteClick.bind(AM_UI);
-    static onToggleHideClickBound = AM_UI.onToggleHideClick.bind(AM_UI);
+    static onDeleteClickBound = PM_UI.onDeleteClick.bind(PM_UI);
+    static onToggleHideClickBound = PM_UI.onToggleHideClick.bind(PM_UI);
 
 
 
@@ -45,7 +57,7 @@ export default class AM_UI extends RE.Component {
    * Creates the crosshair UI element and appends it to the DOM.
    */
   static createCrosshair() {
-    const pm = AssetManager.get();
+    const pm = PrefabManager.get();
     this.crosshairElement = document.createElement('div');
     this.crosshairElement.id = 'rogue-engine-crosshair';
     this.crosshairElement.style.position = 'absolute';
@@ -57,6 +69,7 @@ export default class AM_UI extends RE.Component {
     this.crosshairElement.style.width = '2px';
     this.crosshairElement.style.height = '2px';
     this.crosshairElement.style.backgroundColor = 'transparent';
+    this.crosshairElement.style.display = 'none';
 
     const lineHeight = '5px';
     const lineThickness = '0.5px';
@@ -92,15 +105,15 @@ export default class AM_UI extends RE.Component {
   static createObjectMenuUI() {
     // Cleanup existing UI first
     if (this.objectMenuContainerElement) {
-      this.objectMenuContainerElement.innerHTML = '';
-      if (AssetManager.get().domElement && this.objectMenuContainerElement.parentNode === AssetManager.get().domElement) {
-        AssetManager.get().domElement!.removeChild(this.objectMenuContainerElement);
+      this.objectMenuContainerElement.style.display = 'none';  // Add default hidden state
+      if (PrefabManager.get().domElement && this.objectMenuContainerElement.parentNode === PrefabManager.get().domElement) {
+        PrefabManager.get().domElement!.removeChild(this.objectMenuContainerElement);
       }
       this.objectMenuContainerElement = null;
     }
 
     this.objectMenuContainerElement = document.createElement('div');
-    this.objectMenuContainerElement.id = 'rogue-engine-object-menu';
+    this.objectMenuContainerElement.id = 'prefab-list-container';  // Add ID
     this.objectMenuContainerElement.style.position = 'fixed';
     this.objectMenuContainerElement.style.right = '20px';
     this.objectMenuContainerElement.style.top = '20px';
@@ -112,7 +125,7 @@ export default class AM_UI extends RE.Component {
     this.objectMenuContainerElement.style.borderRadius = '8px';
     this.objectMenuContainerElement.style.fontFamily = 'sans-serif';
     this.objectMenuContainerElement.style.fontSize = '14px';
-    this.objectMenuContainerElement.style.display = 'none';
+    this.objectMenuContainerElement.style.display = 'none';  // Initialize hidden
     this.objectMenuContainerElement.style.flexDirection = 'column';
     this.objectMenuContainerElement.style.gap = '10px';
     this.objectMenuContainerElement.style.minWidth = '300px';
@@ -169,20 +182,20 @@ export default class AM_UI extends RE.Component {
     this.deleteButtonElement = document.createElement('button');
     this.deleteButtonElement.textContent = 'Delete Object';
     this.styleButton(this.deleteButtonElement, '#e74c3c');
-    this.deleteButtonElement.addEventListener('click', AM_UI.onDeleteClickBound);
+    this.deleteButtonElement.addEventListener('click', PM_UI.onDeleteClickBound);
     this.objectMenuContainerElement.appendChild(this.deleteButtonElement);
 
     this.toggleHideButtonElement = document.createElement('button');
     this.toggleHideButtonElement.textContent = 'Toggle Hide';
     this.styleButton(this.toggleHideButtonElement, '#3498db');
-    this.toggleHideButtonElement.addEventListener('click', AM_UI.onToggleHideClickBound);
+    this.toggleHideButtonElement.addEventListener('click', PM_UI.onToggleHideClickBound);
     this.objectMenuContainerElement.appendChild(this.toggleHideButtonElement);
 
-    const savePrefabButton = this.createButton('Save Prefab', () => AssetManager.get().saveSelectedPrefab());
+    const savePrefabButton = this.createButton('Save Prefab', () => PrefabManager.get().saveSelectedPrefab());
     this.objectMenuContainerElement.appendChild(savePrefabButton);
 
-    if (AssetManager.get().domElement) {
-      AssetManager.get().domElement!.appendChild(this.objectMenuContainerElement);
+    if (PrefabManager.get().domElement) {
+      PrefabManager.get().domElement!.appendChild(this.objectMenuContainerElement);
     }
   }
 
@@ -266,7 +279,7 @@ export default class AM_UI extends RE.Component {
         label.style.fontSize = '12px';
         axisContainer.appendChild(label);
   
-        const input = AM_UI.createStyledInputField(id, onInputChange);
+        const input = PM_UI.createStyledInputField(id, onInputChange);
         axisContainer.appendChild(input);
         return { container: axisContainer, input: input };
       };
@@ -323,7 +336,7 @@ export default class AM_UI extends RE.Component {
         parseFloat(yValue!),
         parseFloat(zValue!)
       );
-      AssetManager.updatePrefabTransform(
+      PrefabManager.updatePrefabTransform(
         this.selectedObject.uuid,
         this.selectedObject.position,
         this.selectedObject.rotation,
@@ -337,13 +350,13 @@ export default class AM_UI extends RE.Component {
    */
   static onRotationInputChange() {
     if (this.selectedObject) {
-      AM_UI.setObjectWorldRotation(
+      PM_UI.setObjectWorldRotation(
         this.selectedObject,
         parseFloat(this.rotationXInput!.value),
         parseFloat(this.rotationYInput!.value),
         parseFloat(this.rotationZInput!.value)
       );
-      AssetManager.updatePrefabTransform(
+      PrefabManager.updatePrefabTransform(
         this.selectedObject.uuid,
         this.selectedObject.position,
         this.selectedObject.rotation,
@@ -361,13 +374,13 @@ export default class AM_UI extends RE.Component {
       const yValue = this.scaleYInput?.value;
       const zValue = this.scaleZInput?.value;
 
-      AM_UI.setObjectWorldScale(
+      PM_UI.setObjectWorldScale(
         this.selectedObject,
         parseFloat(xValue!),
         parseFloat(yValue!),
         parseFloat(zValue!)
       );
-      AssetManager.updatePrefabTransform(
+      PrefabManager.updatePrefabTransform(
         this.selectedObject.uuid,
         this.selectedObject.position,
         this.selectedObject.rotation,
@@ -390,7 +403,7 @@ export default class AM_UI extends RE.Component {
     container.appendChild(label);
 
     const input = this.createStyledInputField('render-distance', (e) => {
-      AM_UI.onRenderDistanceChange(e);
+      PM_UI.onRenderDistanceChange(e);
     });
     input.type = 'number';
     input.step = '0.1';
@@ -402,10 +415,10 @@ export default class AM_UI extends RE.Component {
   }
 
   static onRenderDistanceChange(event: Event) {
-    if (!AM_UI.selectedObject) return;
+    if (!PM_UI.selectedObject) return;
     const input = event.target as HTMLInputElement;
     const value = parseFloat(input.value);
-    AssetManager.setRenderDistance(AM_UI.selectedObject.uuid, value);
+    PrefabManager.setRenderDistance(PM_UI.selectedObject.uuid, value);
   }
 
   
@@ -534,9 +547,9 @@ export default class AM_UI extends RE.Component {
        * Handles the "TP to Camera" button click event.
        */
       static onTpToCameraClick() {
-        if (this.selectedObject && AssetManager.get().camera && this.positionXInput && this.positionYInput && this.positionZInput) {
+        if (this.selectedObject && PrefabManager.get().camera && this.positionXInput && this.positionYInput && this.positionZInput) {
           // Set object's world position to camera's world position
-          this.setObjectWorldPosition(this.selectedObject, AssetManager.get().camera!.position.x, AssetManager.get().camera!.position.y, AssetManager.get().camera!.position.z);
+          this.setObjectWorldPosition(this.selectedObject, PrefabManager.get().camera!.position.x, PrefabManager.get().camera!.position.y, PrefabManager.get().camera!.position.z);
           // Also match the object's world rotation to the camera's world rotation
     
           // Update the UI input fields to reflect the new *world* transform values after the update
@@ -557,46 +570,16 @@ export default class AM_UI extends RE.Component {
           if (this.rotationZInput) this.rotationZInput.value = THREE.MathUtils.radToDeg(worldRotation.z).toFixed(2);
     
           // Update prefabMap
-          const entry = AssetManager.prefabMap.get(this.selectedObject.uuid);
+          const entry = PrefabManager.prefabMap.get(this.selectedObject.uuid);
           if (entry) {
             entry.position.copy(this.selectedObject.position);
             entry.rotation.copy(this.selectedObject.rotation);
             entry.scale.copy(this.selectedObject.scale);
-            AssetManager.prefabMap.set(this.selectedObject.uuid, entry);
+            PrefabManager.prefabMap.set(this.selectedObject.uuid, entry);
           }
         }
       }
 
-
-        /**
-   * Creates and appends the camera location display UI element.
-   */
-  static createCameraLocationDisplay() {
-    this.cameraLocationDisplay = document.createElement('div');
-    this.cameraLocationDisplay.id = 'rogue-engine-camera-location';
-    this.cameraLocationDisplay.style.position = 'fixed';
-    this.cameraLocationDisplay.style.bottom = '10px';
-    this.cameraLocationDisplay.style.left = '10px';
-    this.cameraLocationDisplay.style.pointerEvents = 'none';
-    this.cameraLocationDisplay.style.zIndex = '1000';
-    this.cameraLocationDisplay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-    this.cameraLocationDisplay.style.color = 'white';
-    this.cameraLocationDisplay.style.padding = '8px 12px';
-    this.cameraLocationDisplay.style.borderRadius = '5px';
-    this.cameraLocationDisplay.style.fontFamily = 'monospace';
-    this.cameraLocationDisplay.style.fontSize = '12px';
-    this.cameraLocationDisplay.style.backdropFilter = 'blur(3px)';
-  }
-
-  /**
-   * Updates the displayed camera location in the UI.
-   */
-  static updateCameraLocationDisplay() {
-    if (AssetManager.get().camera && AM_UI.cameraLocationDisplay) {
-      const pos = AssetManager.get().camera!.position;
-      AM_UI.cameraLocationDisplay.textContent = `X: ${pos.x.toFixed(2)}, Y: ${pos.y.toFixed(2)}, Z: ${pos.z.toFixed(2)}`;
-    }
-  }
 
     /**
    * Handles the click event for the delete object button.
@@ -606,18 +589,18 @@ export default class AM_UI extends RE.Component {
     }
   
     static deleteSelectedObject() {
-      if (AM_UI.selectedObject) {
+      if (PM_UI.selectedObject) {
         // Find and remove from spawnedPrefabs
-        for (const [uuid, prefab] of AssetManager.get().spawnedPrefabs) {
-          if (prefab === AM_UI.selectedObject) {
-            AssetManager.get().deleteSpawnedPrefab(uuid);
+        for (const [uuid, prefab] of PrefabManager.get().spawnedPrefabs) {
+          if (prefab === PM_UI.selectedObject) {
+            PrefabManager.get().deleteSpawnedPrefab(uuid);
             break;
           }
         }
-        if (AM_UI.objectMenuContainerElement) {
-          AM_UI.objectMenuContainerElement.style.display = 'none';
+        if (PM_UI.objectMenuContainerElement) {
+          PM_UI.objectMenuContainerElement.style.display = 'none';
         }
-        AM_UI.selectedObject = null;
+        PM_UI.selectedObject = null;
       }
     }
 
@@ -626,18 +609,42 @@ export default class AM_UI extends RE.Component {
    * Handles the click event for the toggle hide/show object button.
    */
   static onToggleHideClick() {
-    if (AM_UI.selectedObject) {
-      const uuid = AM_UI.selectedObject.uuid;
-      const entry = AssetManager.prefabMap.get(uuid);
+    if (PM_UI.selectedObject) {
+      const uuid = PM_UI.selectedObject.uuid;
+      const entry = PrefabManager.prefabMap.get(uuid);
       if (entry) {
         entry.isHidden = !entry.isHidden;
       }
-      AM_UI.selectedObject.visible = !entry!.isHidden;
-      if (AM_UI.toggleHideButtonElement) {
-        AM_UI.toggleHideButtonElement.textContent = AM_UI.selectedObject.visible ? 'Hide Object' : 'Show Object';
+      PM_UI.selectedObject.visible = !entry!.isHidden;
+      if (PM_UI.toggleHideButtonElement) {
+        PM_UI.toggleHideButtonElement.textContent = PM_UI.selectedObject.visible ? 'Hide Object' : 'Show Object';
       }
     }
   }
+
+
+    static createSaveButton(): HTMLButtonElement {
+      const button = document.createElement('button');
+      button.textContent = 'Save Prefabs';
+      button.style.position = 'fixed';
+      button.style.top = '20px';
+      button.style.left = '50%';
+      button.style.transform = 'translateX(-50%)';
+      button.style.zIndex = '1000';
+      button.style.width = 'auto';
+      button.style.padding = '8px 16px';
+      button.style.minWidth = '140px';
+      button.style.maxWidth = '200px';
+      button.style.borderRadius = '4px';
+      PM_UI.styleButton(button, '#4CAF50');
+      button.addEventListener('click', () => PM_JsonLoader.savePrefabs());
+      if (PrefabManager.get().domElement) {
+        PrefabManager.get().domElement!.appendChild(button);
+      }
+      PM_UI.saveButtonElement = button;
+      button.style.display = 'none';
+      return button;
+    }
 
 
 

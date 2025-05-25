@@ -1,8 +1,8 @@
 import * as RE from 'rogue-engine';
 import * as THREE from 'three';
-import AM_Handler from './AM_Handler.re'; 
-import AM_JsonLoader from './AM_JsonLoader.re'; 
-import AM_UI from './AM_UI.re';
+import PM_Handler from './PM_Handler.re'; 
+import PM_JsonLoader from './PM_JsonLoader.re'; 
+import PM_UI from './PM_UI.re';
 import { EventDispatcher } from 'three';
 
 interface PrefabEvent {
@@ -11,14 +11,16 @@ interface PrefabEvent {
 }
 
 @RE.registerComponent
-export default class AssetManager extends RE.Component {
+export default class PrefabManager extends RE.Component {
+  static editorModeEnabled: boolean = false;
+
   camera: THREE.PerspectiveCamera | undefined;
 
-  @RE.props.checkbox() editorMode: boolean = true;
+  @RE.props.checkbox() Editor_Mode: boolean = false;
   @RE.props.text() jsonStaticPath = 'prefab-manager.json';
   @RE.props.text() prefabBasePath: string = "";
+  @RE.props.text() referenceObjectNames: string = 'ThirdPersonCharacter';
   @RE.props.text() excludedObjectNames: string = 'ROGUE_INTERNAL_SKYBOX, TerrainCollider';
-  @RE.props.num() prefabSpawnDistance: number = 100; 
   @RE.props.group("Controls", true)
   @RE.props.num() movementSpeed: number = 300;
   @RE.props.num() speedMultiplier: number = 10;
@@ -35,7 +37,8 @@ export default class AssetManager extends RE.Component {
   @RE.props.text() private boostKey = 'shift';
   @RE.props.checkbox() showCrosshairInitially: boolean = true;
   @RE.props.text() toggleCrosshairKey: string = 'c';
-  @RE.props.num() renderDistance: number = 1000000;
+  private renderDistance: number = 1000000;
+  private prefabSpawnDistance: number = 100; 
 
   public prefabListContainer: HTMLElement | null = null;
   public prefabItemsContainer: HTMLElement | null = null; 
@@ -43,6 +46,7 @@ export default class AssetManager extends RE.Component {
   public availablePrefabs: string[] = [];
 
   public excludedNamesArray: string[] = [];
+  public referenceObjects: THREE.Object3D[] = [];
 
   public isPointerLocked: boolean = false;
   public keysPressed: { [key: string]: boolean } = {};
@@ -99,174 +103,153 @@ export default class AssetManager extends RE.Component {
   private spawnInterval: NodeJS.Timeout | null = null;
   private updateInterval: number = 1000;
 
-  async start() {
-    if (this.editorMode) {
-      // Editor-only camera setup
-      const newCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000000);
-      newCamera.position.set(0, 5000, 0);
-      this.pitch = 0;
-      this.yaw = 0;
-      this.tempEuler.set(this.pitch, this.yaw, 0, 'YXZ');
-      this.targetQuaternion.setFromEuler(this.tempEuler);
-      newCamera.quaternion.copy(this.targetQuaternion);
-      RE.Runtime.scene.add(newCamera);
-      RE.Runtime.scene.add(newCamera);
-      RE.App.activeCamera = newCamera.uuid;
-      newCamera.updateProjectionMatrix();
-      this.camera = newCamera;
-
-      this.domElement = RE.Runtime.rogueDOMContainer;
-      if (this.domElement) {
-        AM_UI.createCrosshair();
-        AM_UI.createObjectMenuUI();
-        this.createSaveButton();
-        AM_UI.createCameraLocationDisplay();
-        document.addEventListener('mousemove', this.onMouseMoveBound);
-        document.addEventListener('keydown', this.onKeyDownBound);
-        document.addEventListener('keyup', this.onKeyUpBound);
-        document.addEventListener('pointerlockchange', this.onPointerLockChangeBound);
-        this.domElement.addEventListener('click', this.onLeftClickBound);
-        this.domElement.addEventListener('contextmenu', this.onRightClickBound);
-        document.addEventListener('keydown', (e) => {
-          if (e.key === 'c' || e.key === 'C') {
-            this.toggleAllUI();
-          }
-        });
-        document.addEventListener('wheel', this.onPrefabWheelBound);
-      }
-      console.log("First Person Camera initialized. Click canvas to lock pointer for controls.");
-      console.log(`Controls: ${this.forwardKey}/${this.backwardKey} (Forward/Backward), ${this.strafeLeftKey}/${this.strafeRightKey} (Strafe), ${this.flyUpKey1}/${this.flyDownKey1} or ${this.flyUpKey2}/${this.flyDownKey2} (Fly Up/Down), ${this.boostKey} (Speed Boost), Mouse (Look), ESC (Unlock), ${this.toggleCrosshairKey} (Toggle Crosshair), Left-Click (Raycast & Menu)`);
-
-      this.parseExcludedNames();
-
+  async awake() {
+    if (this.Editor_Mode) {
+      this.initCamera();
     }
+    this.initUI();
+  }
 
+  async start() {
     await this.initPrefabSystem();
 
-    if (this.editorMode) {
-      this.createPrefabListUI();
-      this.loadAvailablePrefabs();
+    this.parseExcludedNames();
+    this.parseReferenceObjects();
 
-      // Initialize render distance after prefabs loaded and camera available
-      if (this.camera) {
-        this.startRenderDistanceCalculation();
-      } else {
-        console.error("Camera not found for render distance initialization");
-      }
+    this.createPrefabListUI();
+    this.loadAvailablePrefabs();
+
+    // Initialize render distance after prefabs loaded and camera available
+    if (this.camera) {
+      this.startRenderDistanceCalculation();
     } else {
-      console.error("Editor mode is disabled. First Person Camera controls and Raycast/UI will not work.");
+      console.error("Camera not found for render distance initialization");
     }
 
     this.initializeRenderSystem();
 
     RE.Runtime.onStop(() => {
-      AM_Handler.onDestroy();
+      PM_Handler.onDestroy();
     })
   }
 
-
-    /**
-   * Called every frame to update camera movement and rotation.
-   */
-    public update() {
-      if (!this.camera || !this.isPointerLocked) {
-        AM_UI.updateCameraLocationDisplay();
-        return;
-      }
-  
-      const deltaTime = RE.Runtime.deltaTime;
-  
-      // Apply rotation smoothing if enabled, otherwise directly copy
-      if (this.rotationSmoothingSpeed > 0) {
-        const maxAngularStep = THREE.MathUtils.degToRad(this.rotationSmoothingSpeed) * deltaTime;
-        this.camera.quaternion.rotateTowards(this.targetQuaternion, maxAngularStep);
-      } else {
-        this.camera.quaternion.copy(this.targetQuaternion);
-      }
-  
-      const baseMoveDistance = this.movementSpeed * deltaTime;
-      let currentMoveDistance = baseMoveDistance;
-      // Apply speed boost if boost key is pressed
-      if (this.keysPressed[this.boostKey]) {
-        currentMoveDistance *= this.speedMultiplier;
-      }
-  
-      const movementVector = this.tempVector.set(0, 0, 0);
-      // Get camera's forward and right vectors
-      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion);
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
-      const globalUp = new THREE.Vector3(0, 1, 0); // Global up direction for flying
-  
-      // Accumulate movement based on pressed keys
-      if (this.keysPressed[this.forwardKey]) {
-        movementVector.add(forward);
-      }
-      if (this.keysPressed[this.backwardKey]) {
-        movementVector.sub(forward);
-      }
-      if (this.keysPressed[this.strafeLeftKey]) {
-        movementVector.sub(right);
-      }
-      if (this.keysPressed[this.strafeRightKey]) {
-        movementVector.add(right);
-      }
-      if (this.keysPressed[this.flyUpKey1] || this.keysPressed[this.flyUpKey2]) {
-        movementVector.add(globalUp);
-      }
-      if (this.keysPressed[this.flyDownKey1] || this.keysPressed[this.flyDownKey2]) {
-        movementVector.sub(globalUp);
-      }
-  
-      // Normalize horizontal movement to prevent faster diagonal movement
-      const horizontalMovementSq = movementVector.x * movementVector.x + movementVector.z * movementVector.z;
-      const verticalMovement = movementVector.y;
-  
-      if (horizontalMovementSq > 0) {
-        const horizontalMagnitude = Math.sqrt(horizontalMovementSq);
-        if (horizontalMagnitude > 1) {
-          movementVector.x /= horizontalMagnitude;
-          movementVector.z /= horizontalMagnitude;
-        }
-      }
-      movementVector.y = verticalMovement; // Preserve vertical movement
-  
-      // Apply the calculated movement to the camera's position
-      this.camera.position.addScaledVector(movementVector, currentMoveDistance);
-      AM_UI.updateCameraLocationDisplay();
-      this.updatePrefabVisibility();
-    }
-
-
-
-
-
-
-
-
-  private createSaveButton(): HTMLButtonElement {
-    const button = document.createElement('button');
-    button.textContent = 'Save Prefabs';
-    button.style.position = 'fixed';
-    button.style.top = '20px';
-    button.style.left = '50%';
-    button.style.transform = 'translateX(-50%)';
-    button.style.zIndex = '1000';
-    button.style.width = 'auto';
-    button.style.padding = '8px 16px';
-    button.style.minWidth = '140px';
-    button.style.maxWidth = '200px';
-    button.style.borderRadius = '4px';
-    AM_UI.styleButton(button, '#4CAF50');
-    button.addEventListener('click', () => AM_JsonLoader.savePrefabs());
-    if (this.domElement) {
-      this.domElement.appendChild(button);
-    }
-    AM_UI.saveButtonElement = button;
-    return button;
+  private initCamera() {
+    const newCamera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000000);
+    newCamera.position.set(0, 5000, 0);
+    this.pitch = 0;
+    this.yaw = 0;
+    this.tempEuler.set(this.pitch, this.yaw, 0, 'YXZ');
+    this.targetQuaternion.setFromEuler(this.tempEuler);
+    newCamera.quaternion.copy(this.targetQuaternion);
+    RE.Runtime.scene.add(newCamera);
+    RE.App.activeCamera = newCamera.uuid;
+    newCamera.updateProjectionMatrix();
+    this.camera = newCamera;
   }
 
+  private initUI() {
+    this.domElement = RE.Runtime.rogueDOMContainer;
+    if (!this.domElement) return;
 
+    PM_UI.createCrosshair();
+    PM_UI.createObjectMenuUI();
+    PM_UI.createSaveButton();
 
+    // Set initial visibility
+    if (this.Editor_Mode) {
+      PM_UI.crosshairElement?.style.setProperty('display', 'block');
+      PM_UI.saveButtonElement?.style.setProperty('display', 'block');
+      document.addEventListener('mousemove', this.onMouseMoveBound);
+      document.addEventListener('keydown', this.onKeyDownBound);
+      document.addEventListener('keyup', this.onKeyUpBound);
+      this.domElement.addEventListener('contextmenu', this.onRightClickBound);
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'c' || e.key === 'C') {
+          this.toggleAllUI();
+        }
+      });
+      document.addEventListener('wheel', this.onPrefabWheelBound);
+    }
+
+    document.addEventListener('pointerlockchange', this.onPointerLockChangeBound);
+    this.domElement.addEventListener('click', this.onLeftClickBound);
+  
+  }
+
+  /**
+   * Called every frame to update camera movement and rotation.
+   */
+  public update() {
+    if (!this.camera) return;
+
+    if (this.Editor_Mode) {
+      const deltaTime = RE.Runtime.deltaTime;
+      this.handleCameraRotation(deltaTime);
+      const movementVector = this.processMovementInput(deltaTime);
+      this.applyCameraMovement(movementVector);
+    }
+    this.updatePrefabVisibility();
+  }
+
+  private handleCameraRotation(deltaTime: number) {
+    if (!this.camera) return;
+    
+    if (this.rotationSmoothingSpeed > 0) {
+      const maxAngularStep = THREE.MathUtils.degToRad(this.rotationSmoothingSpeed) * deltaTime;
+      this.camera.quaternion.rotateTowards(this.targetQuaternion, maxAngularStep);
+    } else {
+      this.camera.quaternion.copy(this.targetQuaternion);
+    }
+  }
+
+  private processMovementInput(deltaTime: number): THREE.Vector3 {
+    const baseMoveDistance = this.movementSpeed * deltaTime;
+    let currentMoveDistance = this.keysPressed[this.boostKey] 
+      ? baseMoveDistance * this.speedMultiplier 
+      : baseMoveDistance;
+
+    const { forward, right, globalUp } = this.calculateMovementVectors();
+    return this.calculateMovementVector(forward, right, globalUp).multiplyScalar(currentMoveDistance);
+  }
+
+  private calculateMovementVectors() {
+    if (!this.camera) return { forward: new THREE.Vector3(), right: new THREE.Vector3(), globalUp: new THREE.Vector3(0, 1, 0) };
+    
+    return {
+      forward: new THREE.Vector3(0, 0, -1).applyQuaternion(this.camera.quaternion),
+      right: new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion),
+      globalUp: new THREE.Vector3(0, 1, 0)
+    };
+  }
+
+  private calculateMovementVector(forward: THREE.Vector3, right: THREE.Vector3, globalUp: THREE.Vector3) {
+    const movement = new THREE.Vector3();
+
+    if (this.keysPressed[this.forwardKey]) movement.add(forward);
+    if (this.keysPressed[this.backwardKey]) movement.sub(forward);
+    if (this.keysPressed[this.strafeLeftKey]) movement.sub(right);
+    if (this.keysPressed[this.strafeRightKey]) movement.add(right);
+    if (this.keysPressed[this.flyUpKey1] || this.keysPressed[this.flyUpKey2]) movement.add(globalUp);
+    if (this.keysPressed[this.flyDownKey1] || this.keysPressed[this.flyDownKey2]) movement.sub(globalUp);
+
+    return this.normalizeMovementVector(movement);
+  }
+
+  private normalizeMovementVector(movement: THREE.Vector3) {
+    const horizontalMovementSq = movement.x ** 2 + movement.z ** 2;
+    if (horizontalMovementSq > 1) {
+      const scale = 1 / Math.sqrt(horizontalMovementSq);
+      movement.x *= scale;
+      movement.z *= scale;
+    }
+    return movement;
+  }
+
+  private applyCameraMovement(movementVector: THREE.Vector3) {
+    if (this.camera) {
+      this.camera.position.add(movementVector);
+    }
+  }
 
   /**
    * Parses the comma-separated excluded object names string into an array.
@@ -278,6 +261,18 @@ export default class AssetManager extends RE.Component {
       .filter(name => name.length > 0);
   }
 
+  private parseReferenceObjects() {
+    this.referenceObjects = [];
+    if (!this.referenceObjectNames) return;
+
+    const names = this.referenceObjectNames.split(',').map(n => n.trim());
+    RE.Runtime.scene.traverse(obj => {
+      if (names.includes(obj.name)) {
+        this.referenceObjects.push(obj);
+      }
+    });
+  }
+
   /**
    * Handles keyboard key down events for camera controls and crosshair toggle.
    * @param event The KeyboardEvent object.
@@ -285,7 +280,7 @@ export default class AssetManager extends RE.Component {
   private onKeyDown(event: KeyboardEvent) {
     const key = event.key.toLowerCase();
     if (key === this.toggleCrosshairKey.toLowerCase()) {
-      AM_UI.setCrosshairVisibility(!AM_UI.isCrosshairVisible);
+      PM_UI.setCrosshairVisibility(!PM_UI.isCrosshairVisible);
       event.preventDefault();
       return;
     }
@@ -364,7 +359,7 @@ export default class AssetManager extends RE.Component {
    * @param event The MouseEvent object.
    */
   private onLeftClick(event: MouseEvent) {
-    if (!this.isPointerLocked) {
+    if (!this.isPointerLocked || !this.Editor_Mode) {
       this.requestPointerLock();
       return;
     }
@@ -451,21 +446,21 @@ export default class AssetManager extends RE.Component {
         console.log('Scale:', prefabRoot.scale); 
         console.log('Hierarchy:', this.getObjectHierarchy(prefabRoot));
         console.groupEnd();
-        AM_UI.selectedObject = prefabRoot; // Select the root of the prefab
+        PM_UI.selectedObject = prefabRoot; // Select the root of the prefab
         this.showObjectMenu(prefabRoot);
         this.updateTransformInputs();
       } else {
         // If a spawned part was hit but no identifiable prefab root, hide menu
-        if (AM_UI.objectMenuContainerElement) {
-          AM_UI.objectMenuContainerElement.style.display = 'none';
+        if (PM_UI.objectMenuContainerElement) {
+          PM_UI.objectMenuContainerElement.style.display = 'none';
         }
-        AM_UI.selectedObject = null;
+        PM_UI.selectedObject = null;
       }
     } else {
       // If no valid object is hit, hide the object menu
-      if (AM_UI.objectMenuContainerElement) {
-        AM_UI.objectMenuContainerElement.style.display = 'none';
-        AM_UI.selectedObject = null;
+      if (PM_UI.objectMenuContainerElement) {
+        PM_UI.objectMenuContainerElement.style.display = 'none';
+        PM_UI.selectedObject = null;
       }
     }
   }
@@ -476,7 +471,7 @@ export default class AssetManager extends RE.Component {
   private onRightClick(event: MouseEvent) {
     event.preventDefault();
 
-    if (!this.camera || !AM_UI.objectMenuContainerElement) return;
+    if (!this.camera || !PM_UI.objectMenuContainerElement) return;
 
     // Raycast from screen center (crosshair position)
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), this.camera);
@@ -519,22 +514,21 @@ export default class AssetManager extends RE.Component {
         console.log('Scale:', prefabRoot.scale); 
         console.log('Hierarchy:', this.getObjectHierarchy(prefabRoot));
         console.groupEnd();
-        AM_UI.selectedObject = prefabRoot;
+        PM_UI.selectedObject = prefabRoot;
         this.showObjectMenu(prefabRoot);
         this.updateTransformInputs();
         
         // Position menu at click location for right-click
-        if (AM_UI.objectMenuContainerElement) {
-          AM_UI.objectMenuContainerElement.style.left = `${event.clientX}px`;
-          AM_UI.objectMenuContainerElement.style.top = `${event.clientY}px`;
+        if (PM_UI.objectMenuContainerElement) {
+          PM_UI.objectMenuContainerElement.style.left = `${event.clientX}px`;
+          PM_UI.objectMenuContainerElement.style.top = `${event.clientY}px`;
         }
       }
     } else {
-      AM_UI.objectMenuContainerElement.style.display = 'none';
-      AM_UI.selectedObject = null;
+      PM_UI.objectMenuContainerElement.style.display = 'none';
+      PM_UI.selectedObject = null;
     }
   }
-
 
   /**
    * Checks if an object's name is in the excluded list.
@@ -546,7 +540,6 @@ export default class AssetManager extends RE.Component {
     const lowerCaseName = object.name.toLowerCase();
     return this.excludedNamesArray.includes(lowerCaseName);
   }
-
 
   /**
    * Handles changes in the pointer lock state.
@@ -566,11 +559,10 @@ export default class AssetManager extends RE.Component {
     }
   }
 
-
   private updatePrefabVisibility() {
     if (!this.camera || !this.prefabListContainer) return;
 
-    const camPos = this.getCameraPosition();
+    const camPos = this.getReferencePosition();
     this.lastCheckPosition.copy(camPos);
 
     // Unload distant prefabs
@@ -598,9 +590,11 @@ export default class AssetManager extends RE.Component {
     });
   }
 
-  private getCameraPosition() {
-    if (!this.camera) return new THREE.Vector3();
-    return this.camera.position.clone();
+  private getReferencePosition(): THREE.Vector3 {
+    if (this.referenceObjects.length > 0) {
+      return this.referenceObjects[0].position.clone();
+    }
+    return this.camera?.position.clone() || new THREE.Vector3();
   }
 
   /**
@@ -630,7 +624,7 @@ export default class AssetManager extends RE.Component {
     this.prefabListContainer.style.overflowY = 'auto';
     this.prefabListContainer.style.padding = '10px';
     this.prefabListContainer.style.zIndex = '999';
-    this.prefabListContainer.style.display = 'flex';
+    this.prefabListContainer.style.display = this.Editor_Mode ? 'block' : 'none';  // Initial visibility
     this.prefabListContainer.style.flexDirection = 'column';
     this.prefabListContainer.style.gap = '5px';
 
@@ -706,7 +700,7 @@ export default class AssetManager extends RE.Component {
       for (const path of prefabPaths) {
         this.availablePrefabs.push(path);
         this.addPrefabToList(path);
-        console.log(`Loaded prefab path: ${path}`);
+        //console.log(`Loaded prefab path: ${path}`);
       }
     } catch (error) {
       console.error('Error loading prefab list:', error);
@@ -791,7 +785,7 @@ export default class AssetManager extends RE.Component {
       });
 
       const uuid = instance.uuid;
-      AssetManager.prefabMap.set(uuid, {
+      PrefabManager.prefabMap.set(uuid, {
         path: prefabPath,
         position: instance.position.clone(),
         rotation: instance.rotation.clone(),
@@ -805,12 +799,12 @@ export default class AssetManager extends RE.Component {
       this.updateSpawnedPrefabsList();
 
       // Automatically select and show UI
-      AM_UI.selectedObject = instance;
-      if (!AM_UI.objectMenuContainerElement) {
-        AM_UI.createObjectMenuUI();
+      PM_UI.selectedObject = instance; // Select the root of the prefab
+      if (!PM_UI.objectMenuContainerElement) {
+        PM_UI.createObjectMenuUI();
       }
-      if (AM_UI.objectMenuContainerElement) {
-        AM_UI.objectMenuContainerElement.style.display = 'flex';
+      if (PM_UI.objectMenuContainerElement) {
+        PM_UI.objectMenuContainerElement.style.display = 'flex';
       }
       this.updateTransformInputs();
       instance.remove();
@@ -825,27 +819,27 @@ export default class AssetManager extends RE.Component {
   }
 
   public updateTransformInputs() {
-    if (!AM_UI.selectedObject) return;
+    if (!PM_UI.selectedObject) return;
 
     // Update position
-    if (AM_UI.positionXInput) AM_UI.positionXInput.value = AM_UI.selectedObject.position.x.toFixed(2);
-    if (AM_UI.positionYInput) AM_UI.positionYInput.value = AM_UI.selectedObject.position.y.toFixed(2);
-    if (AM_UI.positionZInput) AM_UI.positionZInput.value = AM_UI.selectedObject.position.z.toFixed(2);
+    if (PM_UI.positionXInput) PM_UI.positionXInput.value = PM_UI.selectedObject.position.x.toFixed(2);
+    if (PM_UI.positionYInput) PM_UI.positionYInput.value = PM_UI.selectedObject.position.y.toFixed(2);
+    if (PM_UI.positionZInput) PM_UI.positionZInput.value = PM_UI.selectedObject.position.z.toFixed(2);
 
     // Update rotation
-    if (AM_UI.rotationXInput) AM_UI.rotationXInput.value = THREE.MathUtils.radToDeg(AM_UI.selectedObject.rotation.x).toFixed(2);
-    if (AM_UI.rotationYInput) AM_UI.rotationYInput.value = THREE.MathUtils.radToDeg(AM_UI.selectedObject.rotation.y).toFixed(2);
-    if (AM_UI.rotationZInput) AM_UI.rotationZInput.value = THREE.MathUtils.radToDeg(AM_UI.selectedObject.rotation.z).toFixed(2);
+    if (PM_UI.rotationXInput) PM_UI.rotationXInput.value = THREE.MathUtils.radToDeg(PM_UI.selectedObject.rotation.x).toFixed(2);
+    if (PM_UI.rotationYInput) PM_UI.rotationYInput.value = THREE.MathUtils.radToDeg(PM_UI.selectedObject.rotation.y).toFixed(2);
+    if (PM_UI.rotationZInput) PM_UI.rotationZInput.value = THREE.MathUtils.radToDeg(PM_UI.selectedObject.rotation.z).toFixed(2);
 
     // Update scale
-    if (AM_UI.scaleXInput) AM_UI.scaleXInput.value = AM_UI.selectedObject.scale.x.toFixed(2);
-    if (AM_UI.scaleYInput) AM_UI.scaleYInput.value = AM_UI.selectedObject.scale.y.toFixed(2);
-    if (AM_UI.scaleZInput) AM_UI.scaleZInput.value = AM_UI.selectedObject.scale.z.toFixed(2);
+    if (PM_UI.scaleXInput) PM_UI.scaleXInput.value = PM_UI.selectedObject.scale.x.toFixed(2);
+    if (PM_UI.scaleYInput) PM_UI.scaleYInput.value = PM_UI.selectedObject.scale.y.toFixed(2);
+    if (PM_UI.scaleZInput) PM_UI.scaleZInput.value = PM_UI.selectedObject.scale.z.toFixed(2);
 
     // Update render distance
     const renderDistanceInput = document.querySelector<HTMLInputElement>('#render-distance');
     if (renderDistanceInput) {
-      const entry = AssetManager.prefabMap.get(AM_UI.selectedObject.uuid);
+      const entry = PrefabManager.prefabMap.get(PM_UI.selectedObject.uuid);
       renderDistanceInput.value = entry?.renderDistance?.toFixed(2) || '10000.00';
     }
   }
@@ -900,7 +894,7 @@ export default class AssetManager extends RE.Component {
     const prefab = this.spawnedPrefabs.get(uuid);
     if (prefab) {
       // Mark as deleted in prefabMap
-      const entry = AssetManager.prefabMap.get(uuid);
+      const entry = PrefabManager.prefabMap.get(uuid);
       if (entry) entry.isDeleted = true;
       
       // Remove from scene and tracking
@@ -950,7 +944,7 @@ export default class AssetManager extends RE.Component {
     };
 
     // Toggle crosshair
-    toggleElement(AM_UI.crosshairElement);
+    toggleElement(PM_UI.crosshairElement);
     
     // Toggle prefab lists
     if (this.prefabListContainer) {
@@ -961,10 +955,10 @@ export default class AssetManager extends RE.Component {
     }
     
     // Toggle save button
-    toggleElement(AM_UI.saveButtonElement);
+    toggleElement(PM_UI.saveButtonElement);
     
     // Toggle object menu
-    toggleElement(AM_UI.objectMenuContainerElement);
+    toggleElement(PM_UI.objectMenuContainerElement);
   }
 
   public cleanupUI() {
@@ -985,20 +979,19 @@ export default class AssetManager extends RE.Component {
   }
 
   private showPrefab(prefab: THREE.Object3D) {
-    AM_JsonLoader.showPrefab(prefab);
+    PM_JsonLoader.showPrefab(prefab);
   }
 
-
   private showObjectMenu(prefab: THREE.Object3D) {
-    AM_UI.selectedObject = prefab;
-    if (!AM_UI.objectMenuContainerElement) {
-      AM_UI.createObjectMenuUI();
+    PM_UI.selectedObject = prefab;
+    if (!PM_UI.objectMenuContainerElement) {
+      PM_UI.createObjectMenuUI();
     }
-    if (AM_UI.objectMenuContainerElement) {
-      AM_UI.objectMenuContainerElement.style.display = 'flex';
+    if (PM_UI.objectMenuContainerElement) {
+      PM_UI.objectMenuContainerElement.style.display = 'flex';
     }
-    if (AM_UI.objectNameElement) {
-      AM_UI.objectNameElement.textContent = `Selected: ${prefab.name || 'Unnamed Prefab'}`;
+    if (PM_UI.objectNameElement) {
+      PM_UI.objectNameElement.textContent = `Selected: ${prefab.name || 'Unnamed Prefab'}`;
     }
     this.updateTransformInputs();
   }
@@ -1019,29 +1012,29 @@ export default class AssetManager extends RE.Component {
     console.log('Click listener registered');
   }
 
-  public initialize() {
-    this.createUIElements();
-    this.initEventListeners();
-  }
+  //public initialize() {
+  //  this.createUIElements();
+  //  this.initEventListeners();
+  //}
 
   private createUIElements() {
     // Existing UI creation logic from your initialization code
     this.createPrefabListUI();
-    AM_UI.createObjectMenuUI();
-    this.createSaveButton();
+    PM_UI.createObjectMenuUI();
+    PM_UI.createSaveButton();
   }
 
   public saveSelectedPrefab() {
-    if (AM_UI.selectedObject) {
-      const uuid = AM_UI.selectedObject.uuid;
-      const entry = AssetManager.prefabMap.get(uuid);
+    if (PM_UI.selectedObject) {
+      const uuid = PM_UI.selectedObject.uuid;
+      const entry = PrefabManager.prefabMap.get(uuid);
       if (entry) {
-        entry.position.copy(AM_UI.selectedObject.position);
-        entry.rotation.copy(AM_UI.selectedObject.rotation);
-        entry.scale.copy(AM_UI.selectedObject.scale);
-        AssetManager.prefabMap.set(uuid, entry);
+        entry.position.copy(PM_UI.selectedObject.position);
+        entry.rotation.copy(PM_UI.selectedObject.rotation);
+        entry.scale.copy(PM_UI.selectedObject.scale);
+        PrefabManager.prefabMap.set(uuid, entry);
       }
-      AM_JsonLoader.savePrefabs();
+      PM_JsonLoader.savePrefabs();
     }
   }
 
@@ -1049,7 +1042,7 @@ export default class AssetManager extends RE.Component {
     // Start periodic checks for render distance
     setInterval(() => {
       if (this.camera) {
-        AM_JsonLoader.updatePriorityQueue(this.camera.position);
+        PM_JsonLoader.updatePriorityQueue(this.camera.position);
       }
     }, 1000);
   }
@@ -1079,11 +1072,14 @@ export default class AssetManager extends RE.Component {
     if (this.spawnInterval) clearInterval(this.spawnInterval);
     
     const spawnLoop = () => {
-      if (!this.activeCameras[0]) return;
+      if (!this.activeCameras[0] || this.renderDistance < 1 || this.renderDistance > 1000000) {
+        console.error('Spawn system requires valid camera and render distance (1-1M)');
+        return;
+      }
       
       const cameraPos = this.activeCameras[0].position;
-      AM_JsonLoader.updatePriorityQueue(cameraPos);
-      const visiblePrefabs = AM_JsonLoader.getVisiblePrefabs(cameraPos, this.renderDistance);
+      PM_JsonLoader.updatePriorityQueue(cameraPos);
+      const visiblePrefabs = PM_JsonLoader.getVisiblePrefabs(cameraPos, this.renderDistance);
 
       visiblePrefabs.forEach(prefabNode => {
         const prefab = this.prefabPool.find(p => p.uuid === prefabNode.metadata.id);
@@ -1099,11 +1095,32 @@ export default class AssetManager extends RE.Component {
   }
 
   private async initPrefabSystem() {
-    await AM_JsonLoader.loadPrefabs();
-    AM_JsonLoader.startSpawningCycle(
-      this.activeCameras,
+    await PM_JsonLoader.loadPrefabs();
+    const camera = this.getActiveCamera();
+    if (!camera) {
+      console.error('No active camera found!');
+      return;
+    }
+    PM_JsonLoader.startSpawningCycle(
+      camera,
       this.renderDistance,
       this.prefabPool
     );
+  }
+
+  private getActiveCamera(): THREE.Camera | null {
+    if (!this.camera) {
+      // Always use scene traversal mode
+      RE.Runtime.scene.traverse((obj) => {
+        if (obj instanceof THREE.PerspectiveCamera) {
+          this.camera = obj;
+        }
+      });
+
+      if (!this.camera) {
+        throw new Error('No camera found in scene');
+      }
+    }
+    return this.camera;
   }
 }
